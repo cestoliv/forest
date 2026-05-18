@@ -1,0 +1,185 @@
+// src/lib/git.test.ts
+import { execSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  addWorktree,
+  branchExists,
+  getRepoRoot,
+  listWorktreeDirtyFiles,
+  listWorktrees,
+  parseWorktreeList,
+  removeWorktree,
+  resolveWorktreePath,
+} from './git.js';
+
+let tmpDir: string;
+let repoDir: string;
+
+beforeEach(() => {
+  // Resolve symlinks so paths match git's canonical output (macOS /var -> /private/var)
+  tmpDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'wt-git-')));
+  repoDir = path.join(tmpDir, 'repo');
+  execSync(`mkdir -p ${repoDir}`);
+  execSync('git init', { cwd: repoDir });
+  execSync('git config user.email "t@t.com"', { cwd: repoDir });
+  execSync('git config user.name "T"', { cwd: repoDir });
+  writeFileSync(path.join(repoDir, 'README.md'), '');
+  execSync('git add .', { cwd: repoDir });
+  execSync('git commit -m "init"', { cwd: repoDir });
+});
+
+afterEach(() => {
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
+describe('getRepoRoot', () => {
+  it('returns repo root when inside a repo', () => {
+    expect(getRepoRoot(repoDir)).toBe(repoDir);
+  });
+
+  it('throws when not in a git repo', () => {
+    expect(() => getRepoRoot(tmpdir())).toThrow('Not in a git repository');
+  });
+});
+
+describe('listWorktrees', () => {
+  it('lists the main worktree', () => {
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees).toHaveLength(1);
+    expect(worktrees[0].path).toBe(repoDir);
+    expect(worktrees[0].isCurrent).toBe(true);
+    expect(worktrees[0].repoRoot).toBe(repoDir);
+  });
+
+  it('lists additional worktrees', () => {
+    const wtPath = path.join(tmpDir, 'repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees).toHaveLength(2);
+    expect(worktrees.find((w) => w.branch === 'feature')).toBeDefined();
+  });
+
+  it('isCurrent is false for a sibling directory with the same prefix', () => {
+    // Simulates: main worktree at /tmp/xxx/repo, cwd is /tmp/xxx/repo-extra
+    // Uses parseWorktreeList directly to avoid realpathSync on a non-existent path
+    const siblingCwd = `${repoDir}-extra`;
+    const fakeOutput = `worktree ${repoDir}\nHEAD abc123\nbranch refs/heads/master\n`;
+    const worktrees = parseWorktreeList(fakeOutput, repoDir, siblingCwd);
+    expect(worktrees[0].isCurrent).toBe(false);
+  });
+
+  it('includes lastCommit matching the commit subject', () => {
+    // beforeEach already created a commit with message "init"
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees[0].lastCommit).toBe('init');
+  });
+
+  it('returns empty lastCommit when the worktree has no commits', () => {
+    const emptyDir = path.join(tmpDir, 'empty-repo');
+    execSync(`mkdir -p ${emptyDir}`);
+    execSync('git init', { cwd: emptyDir });
+    execSync('git config user.email "t@t.com"', { cwd: emptyDir });
+    execSync('git config user.name "T"', { cwd: emptyDir });
+    // No commits — git log will fail; lastCommit should fall back to ''
+    const worktrees = listWorktrees(
+      realpathSync(emptyDir),
+      realpathSync(emptyDir),
+    );
+    expect(worktrees[0].lastCommit).toBe('');
+  });
+});
+
+describe('addWorktree', () => {
+  it('creates a worktree with a new branch from base', () => {
+    const wtPath = path.join(tmpDir, 'repo-feature');
+    addWorktree(repoDir, wtPath, 'feature', 'HEAD');
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'feature')).toBeDefined();
+  });
+
+  it('creates a worktree from an existing branch', () => {
+    execSync('git checkout -b existing', { cwd: repoDir });
+    execSync('git checkout -', { cwd: repoDir });
+    const wtPath = path.join(tmpDir, 'repo-existing');
+    addWorktree(repoDir, wtPath, 'existing');
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'existing')).toBeDefined();
+  });
+});
+
+describe('removeWorktree', () => {
+  it('removes an additional worktree', () => {
+    const wtPath = path.join(tmpDir, 'repo-to-remove');
+    addWorktree(repoDir, wtPath, 'to-remove', 'HEAD');
+    removeWorktree(repoDir, wtPath);
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees).toHaveLength(1);
+  });
+
+  it('force-removes a worktree with uncommitted changes', () => {
+    const wtPath = path.join(tmpDir, 'repo-dirty');
+    addWorktree(repoDir, wtPath, 'dirty', 'HEAD');
+    writeFileSync(path.join(wtPath, 'dirty.txt'), 'uncommitted');
+    expect(() => removeWorktree(repoDir, wtPath)).toThrow();
+    removeWorktree(repoDir, wtPath, true);
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'dirty')).toBeUndefined();
+  });
+});
+
+describe('listWorktreeDirtyFiles', () => {
+  it('returns empty array for a clean worktree', () => {
+    expect(listWorktreeDirtyFiles(repoDir)).toEqual([]);
+  });
+
+  it('returns modified tracked files', () => {
+    writeFileSync(path.join(repoDir, 'README.md'), 'changed');
+    const files = listWorktreeDirtyFiles(repoDir);
+    expect(files.some((f) => f.includes('README.md'))).toBe(true);
+  });
+
+  it('returns untracked files', () => {
+    writeFileSync(path.join(repoDir, 'new.txt'), 'new');
+    const files = listWorktreeDirtyFiles(repoDir);
+    expect(files.some((f) => f.includes('new.txt'))).toBe(true);
+  });
+
+  it('returns empty array when called with a non-existent path', () => {
+    expect(listWorktreeDirtyFiles('/nonexistent/path')).toEqual([]);
+  });
+});
+
+describe('branchExists', () => {
+  it('returns true for an existing local branch', () => {
+    execSync('git checkout -b my-branch', { cwd: repoDir });
+    execSync('git checkout -', { cwd: repoDir });
+    expect(branchExists(repoDir, 'my-branch')).toBe(true);
+  });
+
+  it('returns false for a non-existent branch', () => {
+    expect(branchExists(repoDir, 'no-such-branch')).toBe(false);
+  });
+});
+
+describe('resolveWorktreePath', () => {
+  it('resolves path using worktree_path and branch', () => {
+    const result = resolveWorktreePath(
+      '/home/user/projects/my-repo',
+      '../',
+      'feature',
+    );
+    expect(result).toBe('/home/user/projects/my-repo-feature');
+  });
+
+  it('sanitizes slashes in branch names', () => {
+    const result = resolveWorktreePath(
+      '/home/user/projects/my-repo',
+      '../',
+      'feature/my-task',
+    );
+    expect(result).toBe('/home/user/projects/my-repo-feature-my-task');
+  });
+});
