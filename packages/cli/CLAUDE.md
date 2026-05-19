@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm run dev          # Run CLI without building (tsx)
 npm run build        # Compile to dist/ and chmod +x dist/cli.js
 npm test             # Run all tests (vitest, single-fork, serial)
+npm run typecheck    # Type-check only (tsc --noEmit)
 npm run lint         # Biome lint check
 npm run format       # Biome auto-format
 ```
@@ -19,6 +20,49 @@ npx vitest run src/lib/git.test.ts
 ```
 
 After building, the CLI is available as `wt` (via the `bin` field in package.json).
+
+## Distribution
+
+The package is published to npm as **`@cestoliv/wt`** (scoped, public —
+`publishConfig.access: public`). The CLI command stays `wt` (from the `bin`
+field key, independent of the package name).
+
+- `dist/` is **gitignored** (not committed). The `files` field ships only
+  `dist/`, and `prepublishOnly` runs `npm run build` so the published tarball
+  always contains a fresh build.
+- **Do not install from the git URL** (`npm install -g github:...`). It is
+  broken on npm 11.x: npm symlinks the package to an ephemeral clone cache it
+  then deletes (open upstream bug npm/cli#8440, #2084, #1865). Registry
+  installs use a completely different path and are unaffected.
+- **Do not add a `prepare`/`prepack`/`postinstall` script.** Use
+  `prepublishOnly` (publish-only, never runs on install) for build-on-publish.
+
+Two workflows:
+
+- `.github/workflows/ci.yml` — quality gate on PRs and `main`: `npm run lint`,
+  `npm run typecheck` (`tsc --noEmit`), `npm test`. No publishing.
+- `.github/workflows/publish.yml` — publishing only (no lint/test; CI covers
+  that). Push to `main` → publish `version` under `latest` (skipped if already
+  on npm — bump `version` to release). Adding the `publish-dev` label to a PR →
+  publish a unique prerelease `X.Y.Z-pr<N>.g<sha>` under a throwaway `pr-<N>`
+  dist-tag (deliberately **not** `latest` or a pretend-stable `dev` channel);
+  the exact version is posted as a PR comment, then the label is removed
+  (re-add it to publish again). The `publish-dev` label must exist in the repo.
+
+CLI version: `src/cli.ts` uses `__WT_VERSION__`, injected at build time by
+`tsup` (`define`) from `package.json` `version` (declared in
+`src/globals.d.ts`). Never hardcode the version; `wt --version` always
+reflects the published version (prereleases included, since `prepublishOnly`
+builds after `npm version`).
+
+Publishing uses **npm Trusted Publishers (OIDC)** — no `NPM_TOKEN` secret.
+The workflow grants `id-token: write` and uses Node 24 (npm ≥ 11.5.1 required;
+provenance is automatic for this public repo/package). A trusted publisher must
+be configured on the package's npmjs.com settings (org `cestoliv`, repo
+`worktrees`, workflow file `publish.yml`). Because that page only exists once
+the package does, the **first publish is a one-time manual bootstrap**
+(`npm publish --access public` after `npm login`); all later publishes are
+tokenless via the workflow.
 
 ## Linting & Formatting Rules
 

@@ -1,7 +1,11 @@
 {
-  "name": "wt",
+  "name": "@cestoliv/wt",
   "version": "0.1.0",
-  "description": "Git worktree manager",
+  "description": "Fast, interactive TUI to browse, create, open, and delete git worktrees across repos.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cestoliv/worktrees.git"
+  },
   "engines": {
     "node": ">=20"
   },
@@ -9,11 +13,19 @@
   "bin": {
     "wt": "./dist/cli.js"
   },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "tsx src/cli.ts",
     "build": "tsup && chmod +x dist/cli.js",
+    "prepublishOnly": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome format --write ."
   },

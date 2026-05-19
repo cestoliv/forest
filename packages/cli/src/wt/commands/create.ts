@@ -76,7 +76,7 @@ export async function createWorktree(
   if (!branch) {
     const input = await clack.text({
       message: 'Branch name:',
-      validate: (v) => (v.length === 0 ? 'Required' : undefined),
+      validate: (v) => (!v || v.length === 0 ? 'Required' : undefined),
     });
     if (clack.isCancel(input)) return;
     branch = input as string;

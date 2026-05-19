@@ -7,16 +7,23 @@ Browse, create, open, and delete worktrees without leaving the terminal. Fuzzy s
 ## Install
 
 ```bash
-npm install -g github:cestoliv/worktrees
+npm install -g @cestoliv/wt
 ```
 
-Requires Node.js 20+ and Git.
+Requires Node.js 20+ and Git. The command is `wt`.
 
 ### Update
 
 ```bash
-npm install -g github:cestoliv/worktrees
+npm install -g @cestoliv/wt
 ```
+
+### Pre-release builds
+
+Add the `publish-dev` label to a PR to publish that branch as a unique,
+pinned prerelease version (e.g. `0.1.0-pr12.gabc1234`). The exact install
+command is posted as a comment on the PR. There is no rolling `dev` channel —
+each build is a distinct version you install explicitly.
 
 ## Quick Start
 

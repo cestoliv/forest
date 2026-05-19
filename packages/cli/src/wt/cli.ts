@@ -5,7 +5,7 @@ const program = new Command();
 program
   .name('wt')
   .description('Git worktree manager')
-  .version('0.1.0')
+  .version(__WT_VERSION__)
   .action(async () => {
     const { runList } = await import('./commands/list.js');
     await runList();
