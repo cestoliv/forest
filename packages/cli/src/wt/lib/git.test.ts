@@ -1,6 +1,12 @@
 // src/lib/git.test.ts
 import { execSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -127,6 +133,33 @@ describe('removeWorktree', () => {
     removeWorktree(repoDir, wtPath, true);
     const worktrees = listWorktrees(repoDir, repoDir);
     expect(worktrees.find((w) => w.branch === 'dirty')).toBeUndefined();
+  });
+
+  it('falls back to manual removal when git worktree remove fails', () => {
+    const wtPath = path.join(tmpDir, 'repo-fallback');
+    addWorktree(repoDir, wtPath, 'fallback', 'HEAD');
+    writeFileSync(path.join(wtPath, '.git'), 'garbage');
+    removeWorktree(repoDir, wtPath, true);
+    expect(existsSync(wtPath)).toBe(false);
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'fallback')).toBeUndefined();
+  });
+
+  it('force-removes when directory is already deleted', () => {
+    const wtPath = path.join(tmpDir, 'repo-gone');
+    addWorktree(repoDir, wtPath, 'gone', 'HEAD');
+    rmSync(wtPath, { recursive: true, force: true });
+    removeWorktree(repoDir, wtPath, true);
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'gone')).toBeUndefined();
+  });
+
+  it('does not fall back when force is false', () => {
+    const wtPath = path.join(tmpDir, 'repo-no-fallback');
+    addWorktree(repoDir, wtPath, 'no-fallback', 'HEAD');
+    writeFileSync(path.join(wtPath, '.git'), 'garbage');
+    expect(() => removeWorktree(repoDir, wtPath)).toThrow();
+    expect(existsSync(wtPath)).toBe(true);
   });
 });
 

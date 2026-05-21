@@ -1,6 +1,6 @@
 // src/lib/git.ts
 import { execFileSync } from 'node:child_process';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 export interface Worktree {
@@ -114,11 +114,23 @@ export function removeWorktree(
   worktreePath: string,
   force = false,
 ): void {
-  execFileSync(
-    'git',
-    ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
-    { cwd: repoRoot, stdio: 'pipe' },
-  );
+  try {
+    execFileSync(
+      'git',
+      ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
+      { cwd: repoRoot, stdio: 'pipe' },
+    );
+  } catch (err) {
+    if (!force) throw err;
+
+    if (existsSync(worktreePath)) {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+    execFileSync('git', ['worktree', 'prune'], {
+      cwd: repoRoot,
+      stdio: 'pipe',
+    });
+  }
 }
 
 export function listWorktreeDirtyFiles(worktreePath: string): string[] {
