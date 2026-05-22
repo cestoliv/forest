@@ -32,6 +32,8 @@ each build is a distinct version you install explicitly.
 wt                  # Browse worktrees
 wt create my-feat   # Create a new worktree and open it in your IDE
 wt config           # Edit config in $EDITOR
+wt config --path    # Print config file path
+wt skill            # Print skill file (for AI agents)
 ```
 
 ## Usage
@@ -81,6 +83,15 @@ Run outside a repo to pick from registered repos via an interactive picker.
 ### Edit config — `wt config`
 
 Opens the config file in `$EDITOR`.
+
+```bash
+wt config           # Open in editor
+wt config --path    # Print the config file path only
+```
+
+### Print skill file — `wt skill`
+
+Prints the bundled skill documentation to stdout. Useful for piping to AI agents or copying into a project.
 
 ## Configuration
 

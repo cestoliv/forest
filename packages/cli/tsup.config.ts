@@ -13,6 +13,9 @@ export default defineConfig({
   shims: true,
   define: {
     __WT_VERSION__: JSON.stringify(version),
+    __WT_SKILL__: JSON.stringify(
+      readFileSync(new URL('./SKILL.md', import.meta.url), 'utf8'),
+    ),
   },
   banner: {
     js: '#!/usr/bin/env node',

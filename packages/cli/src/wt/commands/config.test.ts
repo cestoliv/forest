@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from '../lib/config.js';
-import { getConfigPath, openConfig } from './config.js';
+import { getConfigPath, openConfig, printConfigPath } from './config.js';
 
 let tmpDir: string;
 
@@ -27,6 +27,19 @@ describe('getConfigPath', () => {
     const store = createStore(tmpDir);
     const p = getConfigPath(store);
     expect(p.startsWith(tmpDir)).toBe(true);
+  });
+});
+
+describe('printConfigPath', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('logs only the raw path', () => {
+    const store = createStore(tmpDir);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    printConfigPath(store);
+
+    expect(logSpy).toHaveBeenCalledWith(store.path);
   });
 });
 

@@ -6,6 +6,10 @@ export function getConfigPath(store: ConfigStore = createStore()): string {
   return store.path;
 }
 
+export function printConfigPath(store: ConfigStore = createStore()): void {
+  console.log(store.path);
+}
+
 export function openConfig(store: ConfigStore = createStore()): void {
   const configPath = store.path;
   console.log(`Config: ${configPath}`);

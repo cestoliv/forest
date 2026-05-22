@@ -27,9 +27,9 @@ The package is published to npm as **`@cestoliv/wt`** (scoped, public —
 `publishConfig.access: public`). The CLI command stays `wt` (from the `bin`
 field key, independent of the package name).
 
-- `dist/` is **gitignored** (not committed). The `files` field ships only
-  `dist/`, and `prepublishOnly` runs `npm run build` so the published tarball
-  always contains a fresh build.
+- `dist/` is **gitignored** (not committed). The `files` field ships `dist/`
+  and `SKILL.md`. `prepublishOnly` runs `npm run build` so the published
+  tarball always contains a fresh build.
 - **Do not install from the git URL** (`npm install -g github:...`). It is
   broken on npm 11.x: npm symlinks the package to an ephemeral clone cache it
   then deletes (open upstream bug npm/cli#8440, #2084, #1865). Registry
@@ -53,7 +53,8 @@ CLI version: `src/cli.ts` uses `__WT_VERSION__`, injected at build time by
 `tsup` (`define`) from `package.json` `version` (declared in
 `src/globals.d.ts`). Never hardcode the version; `wt --version` always
 reflects the published version (prereleases included, since `prepublishOnly`
-builds after `npm version`).
+builds after `npm version`). Similarly, `__WT_SKILL__` is injected from
+`SKILL.md` at build time and used by the `wt skill` command.
 
 Publishing uses **npm Trusted Publishers (OIDC)** — no `NPM_TOKEN` secret.
 The workflow grants `id-token: write` and uses Node 24 (npm ≥ 11.5.1 required;
@@ -72,11 +73,12 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 
 ### Entry point & commands
 
-`src/cli.ts` registers three Commander commands and uses **dynamic imports** for each:
+`src/cli.ts` registers Commander commands and uses **dynamic imports** for each:
 
 - `wt` (default, no subcommand) → `src/commands/list.ts` — interactive TUI
 - `wt create [branch]` → `src/commands/create.ts`
-- `wt config` → `src/commands/config.ts` — opens the config file in `$EDITOR`
+- `wt config [--path]` → `src/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
+- `wt skill` → `src/commands/skill.ts` — prints the bundled SKILL.md to stdout
 
 ### Library layer (`src/lib/`)
 
@@ -114,6 +116,8 @@ Config lives in a single global JSON file managed by `conf`. `WtConfig` has top-
 ## Keeping Docs Up to Date
 
 After any change that affects commands, architecture, config schema, testing conventions, or module structure: update the relevant section of this file. If a README.md exists (or should exist), keep it in sync with user-facing changes — new commands, flags, config keys, or install steps. Do this proactively as part of the same task, not as a follow-up.
+
+`SKILL.md` is the agent-facing documentation for the `wt` CLI. It is embedded into the built binary at build time via `__WT_SKILL__` and output by `wt skill`. When adding, removing, or changing commands, flags, config keys, or workflows, update `SKILL.md` in the same task — it must stay in sync with the actual CLI behavior. Treat it with the same priority as README.md.
 
 ## Module System
 

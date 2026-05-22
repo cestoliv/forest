@@ -22,9 +22,23 @@ program
 program
   .command('config')
   .description('Open the config file in $EDITOR')
+  .option('--path', 'Print the config file path and exit')
+  .action(async (options: { path?: boolean }) => {
+    if (options.path) {
+      const { printConfigPath } = await import('./commands/config.js');
+      printConfigPath();
+    } else {
+      const { openConfig } = await import('./commands/config.js');
+      openConfig();
+    }
+  });
+
+program
+  .command('skill')
+  .description('Print the wt skill file to stdout')
   .action(async () => {
-    const { openConfig } = await import('./commands/config.js');
-    openConfig();
+    const { printSkill } = await import('./commands/skill.js');
+    printSkill();
   });
 
 await program.parseAsync(process.argv);

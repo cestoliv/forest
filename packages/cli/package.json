@@ -14,7 +14,8 @@
     "wt": "./dist/cli.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "SKILL.md"
   ],
   "publishConfig": {
     "access": "public"
