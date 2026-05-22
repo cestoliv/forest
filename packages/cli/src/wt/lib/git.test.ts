@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addWorktree,
   branchExists,
+  fetchRemote,
   getRepoRoot,
   listWorktreeDirtyFiles,
   listWorktrees,
@@ -194,6 +195,49 @@ describe('branchExists', () => {
 
   it('returns false for a non-existent branch', () => {
     expect(branchExists(repoDir, 'no-such-branch')).toBe(false);
+  });
+});
+
+describe('fetchRemote', () => {
+  let bareDir: string;
+  let cloneDir: string;
+
+  beforeEach(() => {
+    // Create a bare "remote" and clone it
+    bareDir = path.join(tmpDir, 'remote.git');
+    cloneDir = path.join(tmpDir, 'clone');
+    execSync(`git clone --bare ${repoDir} ${bareDir}`);
+    execSync(`git clone ${bareDir} ${cloneDir}`);
+    execSync('git config user.email "t@t.com"', { cwd: cloneDir });
+    execSync('git config user.name "T"', { cwd: cloneDir });
+  });
+
+  it('updates local tracking refs from the remote', () => {
+    // Push a new commit directly to the bare remote
+    execSync(`git remote add bare ${bareDir}`, { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'new.txt'), 'new');
+    execSync('git add .', { cwd: repoDir });
+    execSync('git commit -m "remote-ahead"', { cwd: repoDir });
+    execSync('git push bare master', { cwd: repoDir });
+
+    // Before fetch, clone's origin/master is stale
+    const before = execSync('git rev-parse origin/master', {
+      cwd: cloneDir,
+      encoding: 'utf8',
+    }).trim();
+
+    fetchRemote(cloneDir, 'origin');
+
+    const after = execSync('git rev-parse origin/master', {
+      cwd: cloneDir,
+      encoding: 'utf8',
+    }).trim();
+
+    expect(after).not.toBe(before);
+  });
+
+  it('throws when the remote does not exist', () => {
+    expect(() => fetchRemote(cloneDir, 'nonexistent')).toThrow();
   });
 });
 

@@ -167,6 +167,14 @@ export function branchExists(repoRoot: string, branch: string): boolean {
   }
 }
 
+export function fetchRemote(repoRoot: string, remote = 'origin'): void {
+  execFileSync('git', ['fetch', remote], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    timeout: 30000,
+  });
+}
+
 export function resolveWorktreePath(
   repoRoot: string,
   worktreePath: string,

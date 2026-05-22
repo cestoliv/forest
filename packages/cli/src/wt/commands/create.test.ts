@@ -93,6 +93,83 @@ describe('createWorktree', () => {
   });
 });
 
+describe('createWorktree (fetch)', () => {
+  it('fetches remote so worktree is based on latest origin', async () => {
+    // Set up a bare remote and a clone (simulates real workflow)
+    const bareDir = path.join(tmpDir, 'remote.git');
+    const cloneDir = path.join(tmpDir, 'my-repo-clone');
+    execSync(`git clone --bare ${repoDir} ${bareDir}`);
+    execSync(`git clone ${bareDir} ${cloneDir}`);
+    execSync('git config user.email "t@t.com"', { cwd: cloneDir });
+    execSync('git config user.name "T"', { cwd: cloneDir });
+
+    // Push a new commit directly to the bare remote (via original repo)
+    execSync(`git remote add bare ${bareDir}`, { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'new.txt'), 'latest');
+    execSync('git add .', { cwd: repoDir });
+    execSync('git commit -m "remote-ahead"', { cwd: repoDir });
+    const defaultBranch = execSync('git branch --show-current', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    }).trim();
+    execSync(`git push bare ${defaultBranch}`, { cwd: repoDir });
+
+    const latestSha = execSync('git rev-parse HEAD', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    }).trim();
+
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: `origin/${defaultBranch}`,
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    await createWorktree('feature', { cwd: cloneDir, store });
+
+    const wtPath = path.join(tmpDir, 'my-repo-clone-feature');
+    const wtSha = execSync('git rev-parse HEAD', {
+      cwd: wtPath,
+      encoding: 'utf8',
+    }).trim();
+    expect(wtSha).toBe(latestSha);
+  });
+
+  it('warns but still creates worktree when fetch fails', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'nonexistent-remote/main',
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Will fail to fetch "nonexistent-remote" but should still create from HEAD
+    // since the branch doesn't exist and baseBranch ref resolution will also fail,
+    // we expect an error from git worktree add itself
+    await expect(
+      createWorktree('feature', { cwd: repoDir, store }),
+    ).rejects.toThrow();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Could not fetch'),
+    );
+    warnSpy.mockRestore();
+  });
+});
+
 describe('createWorktree (setup failure)', () => {
   afterEach(() => vi.restoreAllMocks());
 

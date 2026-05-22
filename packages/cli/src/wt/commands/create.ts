@@ -10,6 +10,7 @@ import {
 import {
   addWorktree,
   branchExists,
+  fetchRemote,
   getRepoRoot,
   resolveWorktreePath,
 } from '../lib/git.js';
@@ -85,6 +86,19 @@ export async function createWorktree(
   registerRepo(repoRoot, store);
 
   const config = getEffectiveConfig(repoRoot, store);
+
+  const parts = config.base_branch.split('/', 2);
+  if (parts.length === 2) {
+    const remote = parts[0];
+    try {
+      fetchRemote(repoRoot, remote);
+    } catch {
+      console.warn(
+        pc.yellow(`⚠ Could not fetch from ${remote} — using local state`),
+      );
+    }
+  }
+
   const worktreePath = resolveWorktreePath(
     repoRoot,
     config.worktree_path,
