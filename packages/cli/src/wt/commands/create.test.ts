@@ -12,6 +12,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import { registerRepo } from '../lib/registry.js';
+import { cloneBareAndCheckout } from '../test-utils.js';
 import { createWorktree } from './create.js';
 
 let tmpDir: string;
@@ -95,13 +96,11 @@ describe('createWorktree', () => {
 
 describe('createWorktree (fetch)', () => {
   it('fetches remote so worktree is based on latest origin', async () => {
-    // Set up a bare remote and a clone (simulates real workflow)
-    const bareDir = path.join(tmpDir, 'remote.git');
-    const cloneDir = path.join(tmpDir, 'my-repo-clone');
-    execSync(`git clone --bare ${repoDir} ${bareDir}`);
-    execSync(`git clone ${bareDir} ${cloneDir}`);
-    execSync('git config user.email "t@t.com"', { cwd: cloneDir });
-    execSync('git config user.name "T"', { cwd: cloneDir });
+    const { bareDir, cloneDir } = cloneBareAndCheckout(
+      tmpDir,
+      repoDir,
+      'my-repo-clone',
+    );
 
     // Push a new commit directly to the bare remote (via original repo)
     execSync(`git remote add bare ${bareDir}`, { cwd: repoDir });
@@ -141,7 +140,61 @@ describe('createWorktree (fetch)', () => {
     expect(wtSha).toBe(latestSha);
   });
 
-  it('warns but still creates worktree when fetch fails', async () => {
+  it('skips fetch when base_branch has no remote prefix', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    await createWorktree('feature', { cwd: repoDir, store });
+
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    expect(existsSync(wtPath)).toBe(true);
+  });
+
+  it('extracts remote correctly when base_branch has multiple slashes', async () => {
+    const { cloneDir } = cloneBareAndCheckout(tmpDir, repoDir, 'my-repo-clone');
+
+    const defaultBranch = execSync('git branch --show-current', {
+      cwd: cloneDir,
+      encoding: 'utf8',
+    }).trim();
+
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: `origin/${defaultBranch}/nested`,
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Fetch should target "origin" (extracted correctly), but the ref
+    // "origin/<branch>/nested" doesn't exist, so worktree creation fails
+    await expect(
+      createWorktree('feature', { cwd: cloneDir, store }),
+    ).rejects.toThrow();
+
+    // Key assertion: no "Could not fetch" warning — the remote "origin" was
+    // found and fetched successfully despite the nested slash in base_branch
+    const warnCalls = warnSpy.mock.calls.flat().join(' ');
+    expect(warnCalls).not.toContain('Could not fetch');
+    warnSpy.mockRestore();
+  });
+
+  it('warns when fetch fails and throws if base branch is also invalid', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig(
       {

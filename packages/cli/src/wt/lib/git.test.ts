@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { cloneBareAndCheckout } from '../test-utils.js';
 import {
   addWorktree,
   branchExists,
@@ -203,13 +204,7 @@ describe('fetchRemote', () => {
   let cloneDir: string;
 
   beforeEach(() => {
-    // Create a bare "remote" and clone it
-    bareDir = path.join(tmpDir, 'remote.git');
-    cloneDir = path.join(tmpDir, 'clone');
-    execSync(`git clone --bare ${repoDir} ${bareDir}`);
-    execSync(`git clone ${bareDir} ${cloneDir}`);
-    execSync('git config user.email "t@t.com"', { cwd: cloneDir });
-    execSync('git config user.name "T"', { cwd: cloneDir });
+    ({ bareDir, cloneDir } = cloneBareAndCheckout(tmpDir, repoDir));
   });
 
   it('updates local tracking refs from the remote', () => {

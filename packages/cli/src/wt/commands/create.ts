@@ -92,9 +92,11 @@ export async function createWorktree(
     const remote = parts[0];
     try {
       fetchRemote(repoRoot, remote);
-    } catch {
+    } catch (err) {
       console.warn(
-        pc.yellow(`⚠ Could not fetch from ${remote} — using local state`),
+        pc.yellow(
+          `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+        ),
       );
     }
   }
