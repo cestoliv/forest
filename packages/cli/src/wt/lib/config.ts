@@ -7,6 +7,8 @@ export interface RepoConfig {
   setup_commands: string[];
   ide: string;
   ide_open_args: string[];
+  agent_command: string;
+  agent_trigger_chord: string;
 }
 
 export interface WtConfig extends RepoConfig {
@@ -20,6 +22,8 @@ export const DEFAULT_CONFIG: WtConfig = {
   setup_commands: [],
   ide: 'zed',
   ide_open_args: ['-n'],
+  agent_command: 'claude --permission-mode plan',
+  agent_trigger_chord: 'ctrl-shift-cmd-c',
   repos: [],
   repo_overrides: {},
 };

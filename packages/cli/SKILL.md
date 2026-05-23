@@ -30,6 +30,28 @@ The worktree is created as a sibling directory to the repo: `<parent>/<repo-name
 
 After creation, `wt` runs any configured `setup_commands` and opens the worktree in your IDE.
 
+### `wt agent <branch> <plan_prompt>`
+
+Create a worktree (same as `wt create`) **and** auto-start an AI agent in Zed's
+integrated terminal, pre-filled with `<plan_prompt>` and left interactive for
+you to take over.
+
+```bash
+wt agent feature/login 'Read the codebase, then propose a plan for login.'
+```
+
+It writes a temporary `.zed/tasks.json` running
+`<agent_command> '<plan_prompt>'`, ensures a global Zed keymap chord
+(`agent_trigger_chord`) spawns that task, opens Zed, presses the chord via
+`osascript`, then removes the temporary task so the repo is left clean.
+
+**macOS + Zed only.** Requires Accessibility permission for the app that runs
+`wt` (Zed itself, when run from its integrated terminal). If it isn't granted,
+`wt agent` opens the *Privacy & Security → Accessibility* settings pane and waits
+for you to grant it and confirm, then retries automatically. On other platforms
+(or when `ide` is not `zed`) the worktree is still created and opened, but the
+agent is not auto-started.
+
 ### `wt config`
 
 Open the global config file in `$EDITOR` (defaults to `nano`).
@@ -56,12 +78,14 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | `setup_commands` | `string[]` | `[]`            | Commands to run in a new worktree after creation (e.g. `["npm install"]`) |
 | `ide`            | `string`   | `"zed"`         | IDE command to open worktrees with                                        |
 | `ide_open_args`  | `string[]` | `["-n"]`        | Arguments passed to the IDE command                                       |
+| `agent_command`  | `string`   | `"claude --permission-mode plan"` | Command `wt agent` runs in Zed; `<plan_prompt>` is appended single-quoted |
+| `agent_trigger_chord` | `string` | `"ctrl-shift-cmd-c"` | Zed keymap chord `wt agent` installs/presses to spawn the agent task    |
 | `repos`          | `string[]` | `[]`            | Registered repo paths (auto-populated on first use)                       |
 | `repo_overrides` | `object`   | `{}`            | Per-repo config overrides (see below)                                     |
 
 ### Per-repo overrides
 
-Override any field (`worktree_path`, `base_branch`, `setup_commands`, `ide`, `ide_open_args`) for a specific repo:
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_trigger_chord`) for a specific repo:
 
 ```json
 {

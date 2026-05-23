@@ -76,7 +76,16 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 `src/cli.ts` registers Commander commands and uses **dynamic imports** for each:
 
 - `wt` (default, no subcommand) → `src/commands/list.ts` — interactive TUI
-- `wt create [branch]` → `src/commands/create.ts`
+- `wt create [branch]` → `src/commands/create.ts`. The full create flow lives
+  here as two reusable exports: `prepareWorktree` (repo/branch resolution +
+  worktree creation + `setup_commands`) and `openConfiguredIde` (open the
+  worktree in the configured IDE + report). `createWorktree` is just
+  `prepareWorktree` + `openConfiguredIde`.
+- `wt agent <branch> <plan_prompt>` → `src/commands/agent.ts` — the AI-first
+  path. Reuses `prepareWorktree` + `openConfiguredIde` (no duplicated create
+  logic) and extends them by auto-starting the configured AI agent in Zed
+  (macOS-only automation via `src/lib/zed.ts`); falls back to a plain
+  `openConfiguredIde` when Zed/`agent_command` is unavailable.
 - `wt config [--path]` → `src/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
 - `wt skill` → `src/commands/skill.ts` — prints the bundled SKILL.md to stdout
 
@@ -90,6 +99,7 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 | `tui.ts`      | Terminal UI: pure functions (`filterItems`, `groupByRepo`, `renderList`) + interactive `runInteractiveList` using raw stdin.                                                                                                           |
 | `ide.ts`      | Launches the configured IDE via `spawn` with `detached: true`. `unref()` is called only after the `spawn` event fires (not immediately) to ensure error events can still surface.                                                      |
 | `setup.ts`    | Runs `setup_commands` in the new worktree via `spawn` with `shell: true`.                                                                                                                                                              |
+| `zed.ts`      | Zed automation for `wt agent`: pure builders (`buildAgentTask`, `parseChord`, `buildOsascript`, keymap/task upserts) + side-effecting wrappers (`writeAgentTask`, `ensureKeymap`, `cleanupAgentTask`, darwin-gated `triggerChord`). Exports `AGENT_TASK_LABEL`.                |
 
 ### Config & config layers
 

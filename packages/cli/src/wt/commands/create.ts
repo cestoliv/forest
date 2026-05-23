@@ -6,6 +6,7 @@ import {
   type ConfigStore,
   createStore,
   getEffectiveConfig,
+  type RepoConfig,
 } from '../lib/config.js';
 import {
   addWorktree,
@@ -19,17 +20,28 @@ import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runSetupCommands } from '../lib/setup.js';
 import { runBranchInput, runRepoPicker } from '../lib/tui.js';
 
-interface CreateOptions {
+export interface CreateOptions {
   cwd?: string;
   store?: ConfigStore;
   repoPicker?: (repos: string[]) => Promise<string | null>;
   branchInput?: (repoRoot: string) => Promise<string | null>;
 }
 
-export async function createWorktree(
+export interface PreparedWorktree {
+  repoRoot: string;
+  worktreePath: string;
+  config: RepoConfig;
+}
+
+/**
+ * Resolve the repo + branch, create the worktree, and run setup commands.
+ * Shared by `wt create` and `wt agent`. Returns the created worktree's path and
+ * effective config, or `null` if the user cancelled out of a prompt.
+ */
+export async function prepareWorktree(
   branch: string | undefined,
   options: CreateOptions = {},
-): Promise<void> {
+): Promise<PreparedWorktree | null> {
   const {
     cwd = process.cwd(),
     store = createStore(),
@@ -49,7 +61,7 @@ export async function createWorktree(
           'No repos registered. cd into a repo and run wt create to get started.',
         ),
       );
-      return;
+      return null;
     }
 
     // Guard against non-TTY contexts (e.g., pipes, non-interactive shells)
@@ -63,23 +75,23 @@ export async function createWorktree(
     }
 
     const picked = await repoPicker(repos);
-    if (!picked) return;
+    if (!picked) return null;
     repoRoot = picked;
     if (!branch) {
       const entered = await branchInput(repoRoot);
-      if (!entered) return;
+      if (!entered) return null;
       branch = entered;
     }
   }
 
-  if (!repoRoot) return;
+  if (!repoRoot) return null;
 
   if (!branch) {
     const input = await clack.text({
       message: 'Branch name:',
       validate: (v) => (!v || v.length === 0 ? 'Required' : undefined),
     });
-    if (clack.isCancel(input)) return;
+    if (clack.isCancel(input)) return null;
     branch = input as string;
   }
 
@@ -134,14 +146,32 @@ export async function createWorktree(
     }
   }
 
-  if (config.ide) {
-    const opened = await openIde(
-      config.ide,
-      config.ide_open_args,
-      worktreePath,
-    );
-    if (opened) {
-      console.log(pc.green(`✓ Opened ${config.ide}`));
-    }
+  return { repoRoot, worktreePath, config };
+}
+
+/**
+ * Open the worktree in the configured IDE (if any) and report it. This is the
+ * tail of the create flow; `wt agent` reuses it both for Zed and as the
+ * non-AI fallback, so the open-and-report behaviour lives in one place.
+ */
+export async function openConfiguredIde(
+  config: RepoConfig,
+  worktreePath: string,
+): Promise<boolean> {
+  if (!config.ide) return false;
+  const opened = await openIde(config.ide, config.ide_open_args, worktreePath);
+  if (opened) {
+    console.log(pc.green(`✓ Opened ${config.ide}`));
   }
+  return opened;
+}
+
+export async function createWorktree(
+  branch: string | undefined,
+  options: CreateOptions = {},
+): Promise<void> {
+  const prepared = await prepareWorktree(branch, options);
+  if (!prepared) return;
+
+  await openConfiguredIde(prepared.config, prepared.worktreePath);
 }

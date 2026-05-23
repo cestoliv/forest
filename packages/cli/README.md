@@ -31,6 +31,7 @@ each build is a distinct version you install explicitly.
 # Inside any git repo
 wt                  # Browse worktrees
 wt create my-feat   # Create a new worktree and open it in your IDE
+wt agent my-feat 'Plan the feature'  # Create + auto-start an AI agent in Zed (macOS)
 wt config           # Edit config in $EDITOR
 wt config --path    # Print config file path
 wt skill            # Print skill file (for AI agents)
@@ -80,6 +81,35 @@ What happens:
 
 Run outside a repo to pick from registered repos via an interactive picker.
 
+### Start an AI agent — `wt agent <branch> <plan_prompt>` (macOS + Zed)
+
+```bash
+wt agent feat/login 'Read the codebase, then propose a plan for login.'
+```
+
+Creates the worktree exactly like `wt create`, then auto-starts an AI agent
+(default `claude --permission-mode plan`) in Zed's integrated terminal,
+pre-filled with your prompt and left interactive for you to take over.
+
+How it works:
+
+1. Writes a temporary `.zed/tasks.json` running `<agent_command> '<plan_prompt>'`.
+2. Ensures a global Zed keymap chord (`agent_trigger_chord`) spawns that task.
+3. Opens Zed, then presses the chord via `osascript`.
+4. Removes the temporary task afterwards, leaving the repo clean.
+
+**Requirements:** macOS, Zed, and **Accessibility** permission for the app that
+runs `wt` (Zed itself, when run from its integrated terminal). If it isn't
+granted yet, `wt agent` detects this, opens *System Settings → Privacy &
+Security → Accessibility* for you, and waits — grant it (you may need to quit and
+reopen the app), confirm, and `wt` retries automatically. On other platforms (or
+when `ide` is not `zed`), the worktree is still created and opened, but the agent
+is not auto-started.
+
+> Tip: trust the parent directory of your worktrees in Claude once (open it and
+> accept the trust prompt) so every worktree created beneath it is trusted
+> automatically and the agent starts hands-free.
+
 ### Edit config — `wt config`
 
 Opens the config file in `$EDITOR`.
@@ -120,6 +150,8 @@ Config is stored at `~/Library/Preferences/wt-nodejs/config.json` (macOS).
 | `base_branch`    | `"origin/main"` | Branch new worktrees are created from         |
 | `worktree_path`  | `"../"`         | Where worktrees are placed (relative to repo) |
 | `setup_commands` | `[]`            | Commands to run in new worktrees              |
+| `agent_command`  | `"claude --permission-mode plan"` | Command `wt agent` runs in Zed (prompt appended) |
+| `agent_trigger_chord` | `"ctrl-shift-cmd-c"` | Zed keymap chord `wt agent` installs/presses |
 | `repo_overrides` | `{}`            | Per-repo overrides for any of the above       |
 
 ## License

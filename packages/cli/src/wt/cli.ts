@@ -20,6 +20,14 @@ program
   });
 
 program
+  .command('agent <branch> <plan_prompt>')
+  .description('Create a worktree and auto-start an AI agent in Zed (macOS)')
+  .action(async (branch: string, planPrompt: string) => {
+    const { createAgentWorktree } = await import('./commands/agent.js');
+    await createAgentWorktree(branch, planPrompt);
+  });
+
+program
   .command('config')
   .description('Open the config file in $EDITOR')
   .option('--path', 'Print the config file path and exit')
