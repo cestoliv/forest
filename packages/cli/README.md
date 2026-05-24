@@ -81,6 +81,10 @@ What happens:
 
 Run outside a repo to pick from registered repos via an interactive picker.
 
+If the worktree path already exists, `wt create` prompts you to **open it in the
+IDE** or **quit** instead of erroring. (In a non-interactive shell it errors
+with a non-zero exit instead of prompting.)
+
 ### Start an AI agent — `wt agent <branch> <plan_prompt>` (macOS + Zed)
 
 ```bash
@@ -105,6 +109,10 @@ Security → Accessibility* for you, and waits — grant it (you may need to qui
 reopen the app), confirm, and `wt` retries automatically. On other platforms (or
 when `ide` is not `zed`), the worktree is still created and opened, but the agent
 is not auto-started.
+
+If the worktree path already exists, `wt agent` prompts you to **open it in the
+IDE**, **open it and start the agent**, or **quit** instead of erroring. (In a
+non-interactive shell it errors with a non-zero exit instead of prompting.)
 
 > Tip: trust the parent directory of your worktrees in Claude once (open it and
 > accept the trust prompt) so every worktree created beneath it is trusted

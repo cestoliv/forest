@@ -37,6 +37,7 @@ vi.mock('../lib/zed.js', () => ({
 vi.mock('@clack/prompts', () => ({
   confirm: vi.fn(async () => false),
   isCancel: vi.fn(() => false),
+  select: vi.fn(),
   text: vi.fn(),
 }));
 
@@ -190,5 +191,61 @@ describe('createAgentWorktree', () => {
 
     expect(writeAgentTask).not.toHaveBeenCalled();
     expect(openIde).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAgentWorktree (existing worktree)', () => {
+  // Pre-create a real worktree so prepareWorktree reports status 'exists'
+  // (a plain directory would now be rejected as "not a git worktree").
+  const preexisting = () => {
+    const store = configure();
+    execSync('git worktree add ../my-repo-feature -b feature', {
+      cwd: repoDir,
+    });
+    return store;
+  };
+
+  it('quits without side effects when the user chooses quit', async () => {
+    const store = preexisting();
+
+    await createAgentWorktree('feature', 'do stuff', {
+      cwd: repoDir,
+      store,
+      existingWorktreePrompt: async () => 'quit' as const,
+    });
+
+    expect(openIde).not.toHaveBeenCalled();
+    expect(writeAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('opens the IDE without starting the agent when the user chooses open', async () => {
+    const store = preexisting();
+
+    await createAgentWorktree('feature', 'do stuff', {
+      cwd: repoDir,
+      store,
+      existingWorktreePrompt: async () => 'open' as const,
+    });
+
+    expect(openIde).toHaveBeenCalledWith('zed', [], expect.any(String));
+    expect(writeAgentTask).not.toHaveBeenCalled();
+    expect(triggerChord).not.toHaveBeenCalled();
+  });
+
+  it('starts the agent in the existing worktree when the user chooses agent', async () => {
+    vi.useFakeTimers();
+    const store = preexisting();
+
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      cwd: repoDir,
+      store,
+      existingWorktreePrompt: async () => 'agent' as const,
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(writeAgentTask).toHaveBeenCalled();
+    expect(triggerChord).toHaveBeenCalled();
+    expect(cleanupAgentTask).toHaveBeenCalled();
   });
 });

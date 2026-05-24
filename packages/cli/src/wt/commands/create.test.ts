@@ -2,6 +2,7 @@
 import { execSync } from 'node:child_process';
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -72,8 +73,12 @@ describe('createWorktree', () => {
 
     expect(existsSync(markerFile)).toBe(true);
   });
+});
 
-  it('throws if worktree path already exists', async () => {
+describe('createWorktree (existing worktree)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const configureEcho = () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig(
       {
@@ -85,12 +90,95 @@ describe('createWorktree', () => {
       },
       store,
     );
+    return store;
+  };
 
+  it('opens the existing worktree when the user chooses open', async () => {
+    const store = configureEcho();
     await createWorktree('feature', { cwd: repoDir, store });
 
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const prompt = vi.fn(async () => 'open' as const);
+
+    await createWorktree('feature', {
+      cwd: repoDir,
+      store,
+      existingWorktreePrompt: prompt,
+    });
+
+    expect(prompt).toHaveBeenCalledWith(expect.any(String), {
+      allowAgent: false,
+    });
+    expect(logSpy.mock.calls.flat().join(' ')).toContain('Opened echo');
+  });
+
+  it('does nothing when the user chooses quit', async () => {
+    const store = configureEcho();
+    await createWorktree('feature', { cwd: repoDir, store });
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const prompt = vi.fn(async () => 'quit' as const);
+
+    await createWorktree('feature', {
+      cwd: repoDir,
+      store,
+      existingWorktreePrompt: prompt,
+    });
+
+    expect(prompt).toHaveBeenCalledWith(expect.any(String), {
+      allowAgent: false,
+    });
+    expect(logSpy.mock.calls.flat().join(' ')).not.toContain('Opened');
+  });
+
+  it('errors when the path exists but is not a worktree', async () => {
+    const store = configureEcho();
+    // A plain directory at the worktree path that git knows nothing about.
+    mkdirSync(path.join(tmpDir, 'my-repo-feature'), { recursive: true });
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`process.exit(${code})`);
+    });
+    const prompt = vi.fn(async () => 'open' as const);
+
     await expect(
-      createWorktree('feature', { cwd: repoDir, store }),
-    ).rejects.toThrow('already exists');
+      createWorktree('feature', {
+        cwd: repoDir,
+        store,
+        existingWorktreePrompt: prompt,
+      }),
+    ).rejects.toThrow('process.exit(1)');
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('not a git worktree'),
+    );
+  });
+
+  it('exits with error when the worktree exists and TTY is not available', async () => {
+    const store = configureEcho();
+    await createWorktree('feature', { cwd: repoDir, store });
+
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`process.exit(${code})`);
+    });
+
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = false;
+    try {
+      // No existingWorktreePrompt injected, so the real promptExistingWorktree
+      // runs and hits its non-TTY guard.
+      await expect(
+        createWorktree('feature', { cwd: repoDir, store }),
+      ).rejects.toThrow('process.exit(1)');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('already exists'),
+      );
+    } finally {
+      process.stdin.isTTY = originalIsTTY;
+    }
   });
 });
 

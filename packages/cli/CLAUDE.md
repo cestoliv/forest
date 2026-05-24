@@ -77,15 +77,23 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 
 - `wt` (default, no subcommand) → `src/commands/list.ts` — interactive TUI
 - `wt create [branch]` → `src/commands/create.ts`. The full create flow lives
-  here as two reusable exports: `prepareWorktree` (repo/branch resolution +
+  here as reusable exports: `prepareWorktree` (repo/branch resolution +
   worktree creation + `setup_commands`) and `openConfiguredIde` (open the
-  worktree in the configured IDE + report). `createWorktree` is just
-  `prepareWorktree` + `openConfiguredIde`.
+  worktree in the configured IDE + report). `prepareWorktree` returns a
+  `status: 'created' | 'exists'` — when the path already exists as a registered
+  worktree it returns early (no fetch/create) and the command prompts via the
+  shared `promptExistingWorktree` (open IDE / start agent / quit; injectable for
+  tests as `CreateOptions.existingWorktreePrompt`); a path that exists but is
+  not a worktree is a hard error. `createWorktree` is
+  `prepareWorktree` + (on `exists`) prompt + `openConfiguredIde`.
 - `wt agent <branch> <plan_prompt>` → `src/commands/agent.ts` — the AI-first
   path. Reuses `prepareWorktree` + `openConfiguredIde` (no duplicated create
-  logic) and extends them by auto-starting the configured AI agent in Zed
-  (macOS-only automation via `src/lib/zed.ts`); falls back to a plain
-  `openConfiguredIde` when Zed/`agent_command` is unavailable.
+  logic) and extends them by auto-starting the configured AI agent in Zed via
+  the extracted `startAgentInWorktree` helper (macOS-only automation via
+  `src/lib/zed.ts`); falls back to a plain `openConfiguredIde` when
+  Zed/`agent_command` is unavailable. On an existing worktree it prompts with
+  `promptExistingWorktree` (the agent option included) and reuses
+  `startAgentInWorktree` for the "open and start agent" choice.
 - `wt config [--path]` → `src/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
 - `wt skill` → `src/commands/skill.ts` — prints the bundled SKILL.md to stdout
 

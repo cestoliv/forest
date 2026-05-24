@@ -30,6 +30,10 @@ The worktree is created as a sibling directory to the repo: `<parent>/<repo-name
 
 After creation, `wt` runs any configured `setup_commands` and opens the worktree in your IDE.
 
+If the worktree path already exists, `wt create` doesn't error — it prompts you
+to **open it in the IDE** or **quit**. (In a non-interactive shell it errors
+with a non-zero exit instead of prompting.)
+
 ### `wt agent <branch> <plan_prompt>`
 
 Create a worktree (same as `wt create`) **and** auto-start an AI agent in Zed's
@@ -51,6 +55,10 @@ It writes a temporary `.zed/tasks.json` running
 for you to grant it and confirm, then retries automatically. On other platforms
 (or when `ide` is not `zed`) the worktree is still created and opened, but the
 agent is not auto-started.
+
+If the worktree path already exists, `wt agent` prompts you to **open it in the
+IDE**, **open it and start the agent**, or **quit** — instead of erroring. (In a
+non-interactive shell it errors with a non-zero exit instead of prompting.)
 
 ### `wt config`
 

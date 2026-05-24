@@ -13,6 +13,7 @@ import {
   branchExists,
   fetchRemote,
   getRepoRoot,
+  listWorktrees,
   resolveWorktreePath,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
@@ -20,23 +21,34 @@ import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runSetupCommands } from '../lib/setup.js';
 import { runBranchInput, runRepoPicker } from '../lib/tui.js';
 
+export type ExistingWorktreeAction = 'open' | 'agent' | 'quit';
+
 export interface CreateOptions {
   cwd?: string;
   store?: ConfigStore;
   repoPicker?: (repos: string[]) => Promise<string | null>;
   branchInput?: (repoRoot: string) => Promise<string | null>;
+  existingWorktreePrompt?: (
+    worktreePath: string,
+    opts: { allowAgent: boolean },
+  ) => Promise<ExistingWorktreeAction>;
 }
 
 export interface PreparedWorktree {
+  /** Whether the worktree was just created or already existed on disk. */
+  status: 'created' | 'exists';
   repoRoot: string;
   worktreePath: string;
   config: RepoConfig;
 }
 
 /**
- * Resolve the repo + branch, create the worktree, and run setup commands.
- * Shared by `wt create` and `wt agent`. Returns the created worktree's path and
- * effective config, or `null` if the user cancelled out of a prompt.
+ * Resolve the repo + branch and ensure a worktree is available for it. Shared
+ * by `wt create` and `wt agent`. When the path is free it creates the worktree,
+ * runs `setup_commands`, and returns `status: 'created'`; when the path is
+ * already a worktree it returns early with `status: 'exists'` (no fetch/create)
+ * so the caller can prompt. Returns `null` if the user cancelled out of a
+ * prompt, and hard-exits if the path exists but is not a worktree.
  */
 export async function prepareWorktree(
   branch: string | undefined,
@@ -99,6 +111,32 @@ export async function prepareWorktree(
 
   const config = getEffectiveConfig(repoRoot, store);
 
+  const worktreePath = resolveWorktreePath(
+    repoRoot,
+    config.worktree_path,
+    branch,
+  );
+
+  // Detect an existing worktree before doing any network work: the caller
+  // prompts the user instead of erroring out. A path that exists but isn't a
+  // registered worktree (e.g. a leftover dir from a half-failed create, or an
+  // unrelated directory matching the naming convention) is not safe to open or
+  // run an agent in, so error out instead of pretending it's a worktree.
+  if (existsSync(worktreePath)) {
+    const isWorktree = listWorktrees(repoRoot).some(
+      (wt) => wt.path === worktreePath,
+    );
+    if (!isWorktree) {
+      console.error(
+        pc.red(
+          `Path already exists but is not a git worktree: ${worktreePath}`,
+        ),
+      );
+      process.exit(1);
+    }
+    return { status: 'exists', repoRoot, worktreePath, config };
+  }
+
   const parts = config.base_branch.split('/', 2);
   if (parts.length === 2) {
     const remote = parts[0];
@@ -111,16 +149,6 @@ export async function prepareWorktree(
         ),
       );
     }
-  }
-
-  const worktreePath = resolveWorktreePath(
-    repoRoot,
-    config.worktree_path,
-    branch,
-  );
-
-  if (existsSync(worktreePath)) {
-    throw new Error(`Worktree path already exists: ${worktreePath}`);
   }
 
   const exists = branchExists(repoRoot, branch);
@@ -146,7 +174,36 @@ export async function prepareWorktree(
     }
   }
 
-  return { repoRoot, worktreePath, config };
+  return { status: 'created', repoRoot, worktreePath, config };
+}
+
+/**
+ * Prompt the user about a worktree that already exists. `wt create` offers
+ * open-or-quit; `wt agent` additionally offers starting the agent. Falls back to
+ * a clear error + exit(1) in non-interactive contexts so scripts still fail.
+ */
+export async function promptExistingWorktree(
+  worktreePath: string,
+  opts: { allowAgent: boolean },
+): Promise<ExistingWorktreeAction> {
+  if (!process.stdin.isTTY) {
+    console.error(pc.red(`Worktree path already exists: ${worktreePath}`));
+    process.exit(1);
+  }
+
+  const choice = await clack.select({
+    message: `Worktree already exists at ${worktreePath}.`,
+    options: [
+      { value: 'open' as const, label: 'Open in IDE' },
+      ...(opts.allowAgent
+        ? [{ value: 'agent' as const, label: 'Open and start agent' }]
+        : []),
+      { value: 'quit' as const, label: 'Ignore and quit' },
+    ],
+  });
+
+  if (clack.isCancel(choice)) return 'quit';
+  return choice;
 }
 
 /**
@@ -173,5 +230,15 @@ export async function createWorktree(
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
 
-  await openConfiguredIde(prepared.config, prepared.worktreePath);
+  const { status, config, worktreePath } = prepared;
+
+  if (status === 'exists') {
+    const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
+    const action = await prompt(worktreePath, { allowAgent: false });
+    // Only 'open' proceeds to open the existing worktree. 'quit' (and 'agent',
+    // which is never offered here since allowAgent is false) stop instead.
+    if (action !== 'open') return;
+  }
+
+  await openConfiguredIde(config, worktreePath);
 }

@@ -1,6 +1,7 @@
 // src/commands/agent.ts
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
+import type { RepoConfig } from '../lib/config.js';
 import {
   AGENT_TASK_LABEL,
   buildAgentTask,
@@ -15,6 +16,7 @@ import {
   type CreateOptions,
   openConfiguredIde,
   prepareWorktree,
+  promptExistingWorktree,
 } from './create.js';
 
 /**
@@ -28,10 +30,9 @@ const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Create a worktree and auto-start the configured AI agent in Zed: write a
- * `.zed/tasks.json` running the agent, ensure the global trigger chord exists,
- * open Zed, press the chord, then remove the ephemeral task to leave the repo
- * clean. macOS/Zed-specific.
+ * Create a worktree and auto-start the configured AI agent in Zed. If the
+ * worktree already exists, prompt the user to open it, open-and-start the agent,
+ * or quit. The agent start itself lives in `startAgentInWorktree`. macOS/Zed-specific.
  */
 export async function createAgentWorktree(
   branch: string,
@@ -41,8 +42,33 @@ export async function createAgentWorktree(
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
 
-  const { config, worktreePath } = prepared;
+  const { status, config, worktreePath } = prepared;
 
+  if (status === 'exists') {
+    const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
+    const action = await prompt(worktreePath, { allowAgent: true });
+    if (action === 'quit') return;
+    if (action === 'open') {
+      await openConfiguredIde(config, worktreePath);
+      return;
+    }
+    // 'agent' falls through to start the agent in the existing worktree.
+  }
+
+  await startAgentInWorktree(config, worktreePath, planPrompt);
+}
+
+/**
+ * Open the worktree in Zed and auto-start the configured AI agent: write a
+ * `.zed/tasks.json` running the agent, ensure the global trigger chord exists,
+ * open Zed, press the chord, then remove the ephemeral task to leave the repo
+ * clean. Reused for freshly-created and pre-existing worktrees. macOS/Zed-only.
+ */
+async function startAgentInWorktree(
+  config: RepoConfig,
+  worktreePath: string,
+  planPrompt: string,
+): Promise<void> {
   // The automation drives Zed specifically; fall back to the plain create
   // behaviour (open the worktree, no agent) otherwise.
   if (config.ide !== 'zed') {
