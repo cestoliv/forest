@@ -163,6 +163,37 @@ describe('removeWorktree', () => {
     expect(() => removeWorktree(repoDir, wtPath)).toThrow();
     expect(existsSync(wtPath)).toBe(true);
   });
+
+  it('force-removes a worktree containing submodules', () => {
+    const subDir = path.join(tmpDir, 'sub-repo');
+    execSync(`mkdir -p ${subDir}`);
+    execSync('git init', { cwd: subDir });
+    execSync('git config user.email "t@t.com"', { cwd: subDir });
+    execSync('git config user.name "T"', { cwd: subDir });
+    writeFileSync(path.join(subDir, 'sub.txt'), '');
+    execSync('git add .', { cwd: subDir });
+    execSync('git commit -m "sub init"', { cwd: subDir });
+
+    execSync(`git -c protocol.file.allow=always submodule add ${subDir} sub`, {
+      cwd: repoDir,
+    });
+    execSync('git commit -m "add submodule"', { cwd: repoDir });
+
+    const wtPath = path.join(tmpDir, 'repo-with-sub');
+    addWorktree(repoDir, wtPath, 'with-sub', 'HEAD');
+    execSync('git -c protocol.file.allow=always submodule update --init', {
+      cwd: wtPath,
+    });
+
+    expect(() => removeWorktree(repoDir, wtPath)).toThrow(
+      'cannot be moved or removed',
+    );
+
+    removeWorktree(repoDir, wtPath, true);
+    expect(existsSync(wtPath)).toBe(false);
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'with-sub')).toBeUndefined();
+  });
 });
 
 describe('listWorktreeDirtyFiles', () => {

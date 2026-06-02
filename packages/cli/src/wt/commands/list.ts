@@ -85,6 +85,23 @@ export async function runList(
         return true;
       } catch (err) {
         const msg = String(err);
+        if (msg.includes('cannot be moved or removed')) {
+          clack.log.warn(
+            'Worktree contains git submodules, which prevent standard removal.',
+          );
+          const force = await clack.confirm({
+            message: `Force delete ${pc.bold(item.branch)}? The worktree directory will be removed directly.`,
+          });
+          if (clack.isCancel(force) || !force) return false;
+          try {
+            removeWorktree(item.repoRoot, item.path, true);
+            console.log(pc.green(`✓ Force-removed ${item.branch}`));
+            return true;
+          } catch (err2) {
+            console.error(pc.red(`✗ Failed to force-remove: ${String(err2)}`));
+            return false;
+          }
+        }
         if (msg.includes('modified or untracked files')) {
           const dirty = listWorktreeDirtyFiles(item.path);
           if (dirty.length > 0) {
