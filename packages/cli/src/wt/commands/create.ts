@@ -15,6 +15,7 @@ import {
   getRepoRoot,
   listWorktrees,
   resolveWorktreePath,
+  setUpstreamTracking,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
@@ -138,8 +139,9 @@ export async function prepareWorktree(
   }
 
   const parts = config.base_branch.split('/', 2);
+  const remote = parts[0] || 'origin';
+
   if (parts.length === 2) {
-    const remote = parts[0];
     try {
       fetchRemote(repoRoot, remote);
     } catch (err) {
@@ -157,6 +159,8 @@ export async function prepareWorktree(
   } else {
     addWorktree(repoRoot, worktreePath, branch, config.base_branch);
   }
+
+  setUpstreamTracking(worktreePath, branch, remote);
 
   console.log(pc.green(`✓ Created worktree at ${worktreePath}`));
 

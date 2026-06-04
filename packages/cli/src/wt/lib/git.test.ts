@@ -21,6 +21,7 @@ import {
   parseWorktreeList,
   removeWorktree,
   resolveWorktreePath,
+  setUpstreamTracking,
 } from './git.js';
 
 let tmpDir: string;
@@ -284,5 +285,43 @@ describe('resolveWorktreePath', () => {
       'feature/my-task',
     );
     expect(result).toBe('/home/user/projects/my-repo-feature-my-task');
+  });
+});
+
+describe('setUpstreamTracking', () => {
+  let cloneDir: string;
+
+  beforeEach(() => {
+    ({ cloneDir } = cloneBareAndCheckout(tmpDir, repoDir));
+  });
+
+  it('sets upstream tracking for a branch with a remote counterpart', () => {
+    execSync('git checkout -b feature', { cwd: cloneDir });
+    execSync('git push origin feature', { cwd: cloneDir });
+    execSync('git checkout -', { cwd: cloneDir });
+
+    const wtPath = path.join(tmpDir, 'clone-feature');
+    addWorktree(cloneDir, wtPath, 'feature');
+    setUpstreamTracking(wtPath, 'feature', 'origin');
+
+    const remote = execSync('git config branch.feature.remote', {
+      cwd: wtPath,
+      encoding: 'utf8',
+    }).trim();
+    const merge = execSync('git config branch.feature.merge', {
+      cwd: wtPath,
+      encoding: 'utf8',
+    }).trim();
+    expect(remote).toBe('origin');
+    expect(merge).toBe('refs/heads/feature');
+  });
+
+  it('silently ignores when the remote branch does not exist', () => {
+    const wtPath = path.join(tmpDir, 'clone-new');
+    addWorktree(cloneDir, wtPath, 'brand-new', 'HEAD');
+
+    expect(() =>
+      setUpstreamTracking(wtPath, 'brand-new', 'origin'),
+    ).not.toThrow();
   });
 });

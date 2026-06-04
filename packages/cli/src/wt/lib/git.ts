@@ -167,6 +167,22 @@ export function branchExists(repoRoot: string, branch: string): boolean {
   }
 }
 
+export function setUpstreamTracking(
+  worktreePath: string,
+  branch: string,
+  remote = 'origin',
+): void {
+  try {
+    execFileSync(
+      'git',
+      ['branch', '--set-upstream-to', `${remote}/${branch}`, branch],
+      { cwd: worktreePath, stdio: 'pipe' },
+    );
+  } catch {
+    // Silently ignore — the remote branch may not exist yet for new branches.
+  }
+}
+
 export function fetchRemote(repoRoot: string, remote = 'origin'): void {
   execFileSync('git', ['fetch', remote], {
     cwd: repoRoot,
