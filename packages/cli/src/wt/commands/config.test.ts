@@ -1,10 +1,10 @@
 // src/commands/config.test.ts
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createStore } from '../lib/config.js';
-import { getConfigPath, openConfig, printConfigPath } from './config.js';
+import { getConfigFilePath } from '../lib/config.js';
+import { openConfig, printConfigPath } from './config.js';
 
 let tmpDir: string;
 
@@ -16,30 +16,15 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true });
 });
 
-describe('getConfigPath', () => {
-  it('returns a path ending in config.json', () => {
-    const store = createStore(tmpDir);
-    const p = getConfigPath(store);
-    expect(p.endsWith('config.json')).toBe(true);
-  });
-
-  it('returns a path inside the provided cwd', () => {
-    const store = createStore(tmpDir);
-    const p = getConfigPath(store);
-    expect(p.startsWith(tmpDir)).toBe(true);
-  });
-});
-
 describe('printConfigPath', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('logs only the raw path', () => {
-    const store = createStore(tmpDir);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
-    printConfigPath(store);
+    printConfigPath(tmpDir);
 
-    expect(logSpy).toHaveBeenCalledWith(store.path);
+    expect(logSpy).toHaveBeenCalledWith(getConfigFilePath(tmpDir));
   });
 });
 
@@ -47,33 +32,77 @@ describe('openConfig', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('logs the config path', () => {
-    const store = createStore(tmpDir);
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
-    openConfig(store);
+    openConfig(tmpDir);
 
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(store.path));
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining(getConfigFilePath(tmpDir)),
+    );
   });
 
-  it('uses EDITOR env var when set', () => {
-    const store = createStore(tmpDir);
+  it('uses EDITOR env var when set', async () => {
     const originalEditor = process.env.EDITOR;
-    process.env.EDITOR = 'true';
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation(() => undefined as never);
+    try {
+      process.env.EDITOR = 'true';
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
 
-    openConfig(store);
+      openConfig(tmpDir);
 
-    // "true" command exits immediately with code 0
-    return new Promise<void>((resolve) => {
-      setTimeout(() => {
-        expect(exitSpy).toHaveBeenCalledWith(0);
-        process.env.EDITOR = originalEditor;
-        resolve();
-      }, 200);
-    });
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          expect(exitSpy).toHaveBeenCalledWith(0);
+          resolve();
+        }, 200);
+      });
+    } finally {
+      process.env.EDITOR = originalEditor;
+    }
+  });
+});
+
+describe('printConfigPath without valid config', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('prints the path even when config JSON is corrupt', () => {
+    writeFileSync(path.join(tmpDir, 'config.json'), '{bad json!!!}');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    printConfigPath(tmpDir);
+
+    expect(logSpy).toHaveBeenCalledWith(getConfigFilePath(tmpDir));
+  });
+});
+
+describe('openConfig without valid config', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('opens editor even when config JSON is corrupt', async () => {
+    writeFileSync(path.join(tmpDir, 'config.json'), '{bad json!!!}');
+    const originalEditor = process.env.EDITOR;
+    try {
+      process.env.EDITOR = 'true';
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const exitSpy = vi
+        .spyOn(process, 'exit')
+        .mockImplementation(() => undefined as never);
+
+      openConfig(tmpDir);
+
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(tmpDir));
+
+      await new Promise<void>((resolve) => {
+        setTimeout(() => {
+          expect(exitSpy).toHaveBeenCalledWith(0);
+          resolve();
+        }, 200);
+      });
+    } finally {
+      process.env.EDITOR = originalEditor;
+    }
   });
 });

@@ -1,11 +1,12 @@
 // src/lib/config.test.ts
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createStore,
   DEFAULT_CONFIG,
+  getConfigFilePath,
   getEffectiveConfig,
   getGlobalConfig,
   setGlobalConfig,
@@ -97,5 +98,33 @@ describe('getEffectiveConfig', () => {
     setGlobalConfig({ repo_overrides: { '/my/repo': { ide: 'code' } } }, store);
     const other = getEffectiveConfig('/other/repo', store);
     expect(other.ide).toBe('zed');
+  });
+});
+
+describe('getConfigFilePath', () => {
+  it('returns a path ending with config.json', () => {
+    const p = getConfigFilePath();
+    expect(p).toMatch(/config\.json$/);
+  });
+});
+
+describe('createStore error handling', () => {
+  it('prints error and exits on malformed config JSON', () => {
+    writeFileSync(path.join(tmpDir, 'config.json'), '{bad json!!!}');
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const exitSpy = vi
+      .spyOn(process, 'exit')
+      .mockImplementation(() => undefined as never);
+
+    createStore(tmpDir);
+
+    expect(errorSpy).toHaveBeenCalledOnce();
+    const errorMsg = errorSpy.mock.calls[0][0];
+    expect(errorMsg).toContain('Error reading config file');
+    expect(errorMsg).toContain(tmpDir);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    errorSpy.mockRestore();
+    exitSpy.mockRestore();
   });
 });

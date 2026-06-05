@@ -1,17 +1,14 @@
 // src/commands/config.ts
 import { spawn } from 'node:child_process';
-import { type ConfigStore, createStore } from '../lib/config.js';
+import { getConfigFilePath } from '../lib/config.js';
 
-export function getConfigPath(store: ConfigStore = createStore()): string {
-  return store.path;
+export function printConfigPath(cwd?: string): void {
+  const configPath = getConfigFilePath(cwd);
+  console.log(configPath);
 }
 
-export function printConfigPath(store: ConfigStore = createStore()): void {
-  console.log(store.path);
-}
-
-export function openConfig(store: ConfigStore = createStore()): void {
-  const configPath = store.path;
+export function openConfig(cwd?: string): void {
+  const configPath = getConfigFilePath(cwd);
   console.log(`Config: ${configPath}`);
   const editor = process.env.EDITOR ?? 'nano';
   const child = spawn(editor, [configPath], { stdio: 'inherit' });

@@ -1,5 +1,7 @@
 // src/lib/config.ts
+import path from 'node:path';
 import Conf from 'conf';
+import envPaths from 'env-paths';
 
 export interface RepoConfig {
   worktree_path: string;
@@ -30,12 +32,27 @@ export const DEFAULT_CONFIG: WtConfig = {
 
 export type ConfigStore = Conf<WtConfig>;
 
+const DEFAULT_CONFIG_DIR = envPaths('wt').config;
+
+export function getConfigFilePath(cwd?: string): string {
+  const dir = cwd ?? DEFAULT_CONFIG_DIR;
+  return path.join(dir, 'config.json');
+}
+
 export function createStore(cwd?: string): ConfigStore {
-  return new Conf<WtConfig>({
-    projectName: 'wt',
-    defaults: DEFAULT_CONFIG,
-    ...(cwd ? { cwd } : {}),
-  });
+  try {
+    return new Conf<WtConfig>({
+      projectName: 'wt',
+      defaults: DEFAULT_CONFIG,
+      ...(cwd ? { cwd } : {}),
+    });
+  } catch (error) {
+    const configPath = getConfigFilePath(cwd);
+    console.error(
+      `Error reading config file: ${configPath}\n${error instanceof Error ? error.message : error}`,
+    );
+    process.exit(1);
+  }
 }
 
 export function getGlobalConfig(store: ConfigStore = createStore()): WtConfig {
