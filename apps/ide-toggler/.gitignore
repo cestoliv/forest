@@ -1,0 +1,15 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Generated app bundle (produced by scripts/make_app.sh)
+IdeToggler.app/
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# macOS
+.DS_Store
