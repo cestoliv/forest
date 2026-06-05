@@ -68,6 +68,75 @@ final class StatusAggregatorStoreTests: XCTestCase {
         XCTAssertEqual(store.rows.map { $0.window.folder }, ["alpha", "zeta"])
     }
 
+    // MARK: - compactRow
+
+    func test_compactRow_picksMostRecentlyActive() {
+        let win = MockWindowSource([
+            ZedWindow(id: "w1", folder: "alpha"), ZedWindow(id: "w2", folder: "beta")])
+        let sess = MockSessionSource(
+            [Session(pid: 1, cwd: "/x/alpha", status: .idle),
+             Session(pid: 2, cwd: "/x/beta", status: .idle)],
+            [1: Date(timeIntervalSince1970: 100), 2: Date(timeIntervalSince1970: 200)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        XCTAssertEqual(store.compactRow?.window.id, "w2")  // beta is newer
+    }
+
+    func test_compactRow_prefersNeedsAttentionOverMoreRecent() {
+        let win = MockWindowSource([
+            ZedWindow(id: "w1", folder: "alpha"), ZedWindow(id: "w2", folder: "beta")])
+        let sess = MockSessionSource(
+            [Session(pid: 1, cwd: "/x/alpha", status: .waiting),  // needsAttention, older
+             Session(pid: 2, cwd: "/x/beta", status: .idle)],     // idle, more recent
+            [1: Date(timeIntervalSince1970: 100), 2: Date(timeIntervalSince1970: 200)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        XCTAssertEqual(store.compactRow?.window.id, "w1")  // needs-you wins despite older
+    }
+
+    func test_compactRow_fallsBackToFirstRowWhenNoActivity() {
+        let win = MockWindowSource([
+            ZedWindow(id: "w1", folder: "zeta"), ZedWindow(id: "w2", folder: "alpha")])
+        let sess = MockSessionSource([])  // no sessions, no activity
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        XCTAssertEqual(store.compactRow?.window.folder, "alpha")  // rows.first (alphabetical)
+    }
+
+    func test_compactRow_nilWhenNoWindows() {
+        let win = MockWindowSource([])
+        let sess = MockSessionSource([])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        XCTAssertNil(store.compactRow)
+    }
+
+    func test_compactModeToggle_doesNotChimeOrAnimate() {
+        let win = MockWindowSource([ZedWindow(id: "w1", folder: "alpha")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/alpha", status: .idle)])
+        let chime = SpyChime()
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: chime, settings: Settings(orderMode: .statusPriority, muted: false))
+        store.refresh()
+        let countAfterBaseline = chime.count
+
+        store.settings.compactMode = true  // didSet triggers refresh()
+
+        XCTAssertEqual(chime.count, countAfterBaseline,
+                       "compact-mode toggle must not play chime")
+        XCTAssertTrue(store.animatingWindowIDs.isEmpty,
+                      "compact-mode toggle must not add to animatingWindowIDs")
+    }
+
     /// Carry-forward fix D: changing ONLY the order mode must NOT fire a chime and
     /// must NOT add to animatingWindowIDs — order-mode switches are not transitions.
     func test_orderModeChange_doesNotChimeOrAnimate() {

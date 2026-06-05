@@ -64,6 +64,18 @@ public struct PanelView: View {
         store.rows.map(\.window.id).joined(separator: "|")
     }
 
+    // Counts per StatusGroup across all rows, in display order (needs, working,
+    // idle), omitting any group with a zero count. Drives the compact header.
+    private var statusCounts: [(group: StatusGroup, count: Int)] {
+        var tally: [StatusGroup: Int] = [:]
+        for row in store.rows { tally[StatusGroup(row.state), default: 0] += 1 }
+        let order: [StatusGroup] = [.needs, .working, .idle]
+        return order.compactMap { g in
+            let c = tally[g] ?? 0
+            return c > 0 ? (group: g, count: c) : nil
+        }
+    }
+
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if store.rows.isEmpty {
@@ -72,6 +84,16 @@ public struct PanelView: View {
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 22)
+            } else if store.settings.compactMode {
+                // No orderKey reorder animation here: compact mode shows a single row,
+                // so there's nothing to FLIP between — a swap just replaces it outright.
+                VStack(alignment: .leading, spacing: 0) {
+                    CompactHeader(parts: statusCounts)
+                    if let row = store.compactRow {
+                        rowView(for: row)
+                    }
+                }
+                .padding(5)
             } else {
                 VStack(alignment: .leading, spacing: 0) {
                     if showsGroups {
@@ -99,17 +121,12 @@ public struct PanelView: View {
     }
 
     private func rowView(for row: WindowRow) -> some View {
+        // Animation cleanup is owned by the store (see StatusAggregatorStore.refresh),
+        // so it works even in compact mode where only one row is mounted.
         GlassRow(
             row: row,
             pulsing: store.animatingWindowIDs.contains(row.window.id),
             onTap: { raiser.raise(windowID: row.window.id) })
-        .onChange(of: store.animatingWindowIDs.contains(row.window.id)) { animating in
-            if animating {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    store.clearAnimation(for: row.window.id)
-                }
-            }
-        }
     }
 }
 
@@ -133,6 +150,30 @@ private struct GroupHeader: View {
             Spacer(minLength: 0)
         }
         .padding(.top, 12)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 5)
+    }
+}
+
+// MARK: - Compact header (inline status counts joined by middots)
+private struct CompactHeader: View {
+    let parts: [(group: StatusGroup, count: Int)]
+
+    var body: some View {
+        // `parts` is always non-empty here: CompactHeader only renders for a non-empty
+        // row list, and every row maps to one StatusGroup, so statusCounts has an entry.
+        HStack(spacing: 6) {
+            ForEach(parts, id: \.group) { part in
+                if part.group != parts.first?.group {
+                    Text("·").foregroundStyle(.white.opacity(0.3))
+                }
+                Text("\(part.group.label) \(part.count)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.6))
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 10)
         .padding(.horizontal, 12)
         .padding(.bottom, 5)
     }
@@ -221,11 +262,33 @@ private struct Footer: View {
     @ObservedObject var store: StatusAggregatorStore
     let settingsStore: SettingsStore
     @State private var hovering = false
+    @State private var compactHovering = false
     @State private var showingSettings = false
+
+    private var isCompact: Bool { store.settings.compactMode }
 
     var body: some View {
         HStack {
             Spacer()
+            Button {
+                store.settings.compactMode.toggle()
+                settingsStore.save(store.settings)
+            } label: {
+                Image(systemName: isCompact
+                      ? "arrow.up.left.and.arrow.down.right"
+                      : "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white.opacity(compactHovering ? 0.95 : 0.6))
+                    .frame(width: 30, height: 30)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(.white.opacity(compactHovering ? 0.10 : 0.0)))
+            }
+            .buttonStyle(.plain)
+            .onHover { compactHovering = $0 }
+            .animation(.easeOut(duration: 0.18), value: compactHovering)
+            .help(isCompact ? "Expand" : "Compact")
+
             Button { showingSettings.toggle() } label: {
                 Image(systemName: "gearshape")
                     .font(.system(size: 15))

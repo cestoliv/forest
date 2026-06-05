@@ -59,7 +59,8 @@ public enum OrderMode: String, Equatable, Sendable, CaseIterable {
 public struct Settings: Equatable, Sendable {
     public var orderMode: OrderMode
     public var muted: Bool
-    public init(orderMode: OrderMode = .statusPriority, muted: Bool = false) {
-        self.orderMode = orderMode; self.muted = muted
+    public var compactMode: Bool
+    public init(orderMode: OrderMode = .statusPriority, muted: Bool = false, compactMode: Bool = false) {
+        self.orderMode = orderMode; self.muted = muted; self.compactMode = compactMode
     }
 }

@@ -13,14 +13,16 @@ final class SettingsStoreTests: XCTestCase {
         let s = store.load()
         XCTAssertEqual(s.orderMode, .statusPriority)
         XCTAssertFalse(s.muted)
+        XCTAssertFalse(s.compactMode)
     }
 
     func test_roundTrips() {
         let defaults = freshDefaults()
         let store = UserDefaultsSettingsStore(defaults: defaults)
-        store.save(Settings(orderMode: .recentlyActive, muted: true))
+        store.save(Settings(orderMode: .recentlyActive, muted: true, compactMode: true))
         let reloaded = UserDefaultsSettingsStore(defaults: defaults).load()
         XCTAssertEqual(reloaded.orderMode, .recentlyActive)
         XCTAssertTrue(reloaded.muted)
+        XCTAssertTrue(reloaded.compactMode)
     }
 }

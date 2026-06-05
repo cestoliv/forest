@@ -57,6 +57,16 @@ public final class StatusAggregatorStore: ObservableObject {
             // Animation ALWAYS plays; sound respects mute.
             animatingWindowIDs = Set(transitions)
             if !settings.muted { chime.playChime() }
+            // Auto-clear once the pulse has played. This lives here, not in the view,
+            // so cleanup happens regardless of which rows are mounted: in compact mode
+            // only one row renders, so a view-driven timer would strand the ids of any
+            // hidden window that just transitioned (and could leave it stuck scaled if
+            // it later became the compact row).
+            for id in transitions {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.clearAnimation(for: id)
+                }
+            }
         }
 
         previousStates = newStates
@@ -65,5 +75,19 @@ public final class StatusAggregatorStore: ObservableObject {
 
     public func clearAnimation(for id: String) {
         animatingWindowIDs.remove(id)
+    }
+
+    /// Row to show in compact mode. Prefers a needs-attention window (the most recent
+    /// among them, or the first in current display order if none have activity);
+    /// otherwise the most-recently-active window; falls back to the first row (respects
+    /// orderMode) when no window has activity; nil when empty.
+    public var compactRow: WindowRow? {
+        func mostRecent(_ rs: [WindowRow]) -> WindowRow? {
+            rs.compactMap { r in r.lastActive.map { (r, $0) } }
+              .max(by: { $0.1 < $1.1 })?.0
+        }
+        let needs = rows.filter { $0.state == .needsAttention }
+        if let r = mostRecent(needs) ?? needs.first { return r }
+        return mostRecent(rows) ?? rows.first
     }
 }
