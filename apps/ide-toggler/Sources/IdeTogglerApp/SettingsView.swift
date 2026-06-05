@@ -27,6 +27,9 @@ public struct SettingsView: View {
                     store.settings.muted = muted
                     settingsStore.save(store.settings)
                 }))
-        }.frame(width: 220)
+        }
+        .tint(Palette.terracotta)
+        .frame(width: 220)
+        .preferredColorScheme(.dark)
     }
 }

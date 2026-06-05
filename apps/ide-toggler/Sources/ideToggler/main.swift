@@ -9,11 +9,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var store: StatusAggregatorStore!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // SAFETY: read-only permission probe. Does not signal/close anything.
-        if !AXIsProcessTrusted() {
-            promptForAccessibility()
-        }
-
         let settingsStore = UserDefaultsSettingsStore()
         let windowSource = AXWindowSource()
         let raiser = AXWindowRaiser(source: windowSource)
@@ -28,7 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.store = store
         store.start()
 
+        // Show the panel first so the app is visibly running regardless of trust;
+        // the window source polls every 5s, so granting access repopulates it live.
         panelController.show(store: store, raiser: raiser, settingsStore: settingsStore)
+
+        // SAFETY: read-only permission probe. Does not signal/close anything.
+        if !AXIsProcessTrusted() {
+            promptForAccessibility()
+        }
     }
 
     private func promptForAccessibility() {
