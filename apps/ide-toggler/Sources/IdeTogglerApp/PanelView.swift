@@ -121,12 +121,15 @@ public struct PanelView: View {
     }
 
     private func rowView(for row: WindowRow) -> some View {
-        // Animation cleanup is owned by the store (see StatusAggregatorStore.refresh),
-        // so it works even in compact mode where only one row is mounted.
+        // Blink state is owned by the store (see StatusAggregatorStore.refresh), so it
+        // persists and clears correctly even in compact mode where only one row mounts.
         GlassRow(
             row: row,
-            pulsing: store.animatingWindowIDs.contains(row.window.id),
-            onTap: { raiser.raise(windowID: row.window.id) })
+            blinking: store.blinkingWindowIDs.contains(row.window.id),
+            onTap: {
+                store.clearBlink(for: row.window.id)
+                raiser.raise(windowID: row.window.id)
+            })
     }
 }
 
@@ -182,7 +185,7 @@ private struct CompactHeader: View {
 // MARK: - Row
 private struct GlassRow: View {
     let row: WindowRow
-    let pulsing: Bool
+    let blinking: Bool
     let onTap: () -> Void
     @State private var hovering = false
 
@@ -206,10 +209,6 @@ private struct GlassRow: View {
             HStack(spacing: 11) {
                 statusIcon(for: row.state, size: 14)
                     .frame(width: 14, height: 14)
-                    .scaleEffect(pulsing ? 1.25 : 1.0)
-                    .animation(
-                        .easeInOut(duration: 0.25).repeatCount(3, autoreverses: true),
-                        value: pulsing)
 
                 Text(displayName)
                     .font(.system(size: 13))
@@ -229,9 +228,33 @@ private struct GlassRow: View {
             .padding(.horizontal, 9)
             .contentShape(Rectangle())
         }
+        .background(BlinkHighlight(active: blinking))
         .buttonStyle(PressableRowStyle(hovering: hovering, needs: row.state == .needsAttention))
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.18), value: hovering)
+    }
+}
+
+/// Persistent attention cue for the most-recently-moved project: a terracotta fill
+/// behind the row that pulses opacity forever while `active`, easing out to clear when
+/// it stops. Shares the row's frame (and 9pt radius) by being a `.background` on the
+/// Button, so it sits under the hover/press tint from `PressableRowStyle`.
+private struct BlinkHighlight: View {
+    let active: Bool
+    @State private var on = false
+
+    var body: some View {
+        // Single `on` toggle + repeatForever(autoreverses:) oscillates the opacity
+        // between the two interpolated states indefinitely (standard SwiftUI idiom).
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(Palette.terracotta.opacity(active ? (on ? 0.30 : 0.06) : 0))
+            .animation(
+                active ? .easeInOut(duration: 0.65).repeatForever(autoreverses: true)
+                       : .easeOut(duration: 0.2),
+                value: on)
+            .onAppear { on = active }
+            .onChange(of: active) { newValue in on = newValue }
+            .allowsHitTesting(false)
     }
 }
 
@@ -293,11 +316,11 @@ private struct Footer: View {
                 Image(systemName: "gearshape")
                     .font(.system(size: 15))
                     .foregroundStyle(.white.opacity(hovering ? 0.95 : 0.6))
+                    .rotationEffect(.degrees(hovering ? 45 : 0))  // spin the gear only, not its square
                     .frame(width: 30, height: 30)
                     .background(
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .fill(.white.opacity(hovering ? 0.10 : 0.0)))
-                    .rotationEffect(.degrees(hovering ? 45 : 0))
             }
             .buttonStyle(.plain)
             .onHover { hovering = $0 }

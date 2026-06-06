@@ -133,12 +133,12 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
         XCTAssertEqual(chime.count, countAfterBaseline,
                        "compact-mode toggle must not play chime")
-        XCTAssertTrue(store.animatingWindowIDs.isEmpty,
-                      "compact-mode toggle must not add to animatingWindowIDs")
+        XCTAssertTrue(store.blinkingWindowIDs.isEmpty,
+                      "compact-mode toggle must not add to blinkingWindowIDs")
     }
 
     /// Carry-forward fix D: changing ONLY the order mode must NOT fire a chime and
-    /// must NOT add to animatingWindowIDs — order-mode switches are not transitions.
+    /// must NOT add to blinkingWindowIDs — order-mode switches are not transitions.
     func test_orderModeChange_doesNotChimeOrAnimate() {
         let win = MockWindowSource([ZedWindow(id: "w1", folder: "alpha")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/alpha", status: .idle)])
@@ -155,7 +155,81 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
         XCTAssertEqual(chime.count, countAfterBaseline,
                        "order-mode change must not play chime")
-        XCTAssertTrue(store.animatingWindowIDs.isEmpty,
-                      "order-mode change must not add to animatingWindowIDs")
+        XCTAssertTrue(store.blinkingWindowIDs.isEmpty,
+                      "order-mode change must not add to blinkingWindowIDs")
+    }
+
+    // MARK: - Blink ("last moved" attention cue)
+
+    func test_workingToIdle_populatesBlinking() {
+        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()                                              // working
+        sess.emit([Session(pid: 1, cwd: "/x/proj", status: .idle)]) // -> idle
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
+    }
+
+    func test_secondTransition_replacesBlinking() {
+        let win = MockWindowSource([
+            ZedWindow(id: "w1", folder: "alpha"), ZedWindow(id: "w2", folder: "beta")])
+        let sess = MockSessionSource([
+            Session(pid: 1, cwd: "/x/alpha", status: .busy),
+            Session(pid: 2, cwd: "/x/beta", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()  // both working
+        // w1 moves to idle.
+        sess.emit([
+            Session(pid: 1, cwd: "/x/alpha", status: .idle),
+            Session(pid: 2, cwd: "/x/beta", status: .busy)])
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
+        // w2 moves to idle -> replaces the blinker (only the last-moved blinks).
+        sess.emit([
+            Session(pid: 1, cwd: "/x/alpha", status: .idle),
+            Session(pid: 2, cwd: "/x/beta", status: .idle)])
+        XCTAssertEqual(store.blinkingWindowIDs, ["w2"])
+    }
+
+    func test_clearBlink_removesID() {
+        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        sess.emit([Session(pid: 1, cwd: "/x/proj", status: .idle)])
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
+        store.clearBlink(for: "w1")
+        XCTAssertTrue(store.blinkingWindowIDs.isEmpty)
+    }
+
+    func test_blinkClears_whenWindowLeavesIdle() {
+        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        sess.emit([Session(pid: 1, cwd: "/x/proj", status: .idle)])  // blinking
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
+        sess.emit([Session(pid: 1, cwd: "/x/proj", status: .busy)])  // back to working
+        XCTAssertTrue(store.blinkingWindowIDs.isEmpty)
+    }
+
+    func test_blinkClears_whenWindowDisappears() {
+        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()
+        sess.emit([Session(pid: 1, cwd: "/x/proj", status: .idle)])  // blinking
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
+        win.emit([])  // window closed
+        XCTAssertTrue(store.blinkingWindowIDs.isEmpty)
     }
 }

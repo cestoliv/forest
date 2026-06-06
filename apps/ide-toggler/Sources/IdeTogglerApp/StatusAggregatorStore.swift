@@ -8,8 +8,10 @@ import IdeTogglerCore
 /// delegated to a WindowRaising injected into the UI.
 public final class StatusAggregatorStore: ObservableObject {
     @Published public private(set) var rows: [WindowRow] = []
-    /// Window ids that just transitioned working->idle, for the UI to animate.
-    @Published public private(set) var animatingWindowIDs: Set<String> = []
+    /// Window ids that should blink in the list: the project(s) that most recently
+    /// transitioned working->idle. Persists until another project moves, the row is
+    /// clicked, the window leaves the idle state, or the window disappears.
+    @Published public private(set) var blinkingWindowIDs: Set<String> = []
     @Published public var settings: Settings {
         didSet { refresh() }
     }
@@ -53,28 +55,23 @@ public final class StatusAggregatorStore: ObservableObject {
         let transitions = Aggregator.workingToIdleTransitions(
             previous: previousStates, current: newStates)
 
+        // Prune blinkers that disappeared or are no longer idle (clear-on-any-change /
+        // clear-on-close). A new working->idle transition then replaces the set, so the
+        // "last moved" project blinks and any previous blinker stops.
+        let idleIDs = Set(newRows.filter { $0.state == .idle }.map(\.window.id))
+        var nextBlink = blinkingWindowIDs.intersection(idleIDs)
         if !transitions.isEmpty {
-            // Animation ALWAYS plays; sound respects mute.
-            animatingWindowIDs = Set(transitions)
-            if !settings.muted { chime.playChime() }
-            // Auto-clear once the pulse has played. This lives here, not in the view,
-            // so cleanup happens regardless of which rows are mounted: in compact mode
-            // only one row renders, so a view-driven timer would strand the ids of any
-            // hidden window that just transitioned (and could leave it stuck scaled if
-            // it later became the compact row).
-            for id in transitions {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.clearAnimation(for: id)
-                }
-            }
+            nextBlink = Set(transitions)
+            if !settings.muted { chime.playChime() }  // blink always shows; sound respects mute
         }
+        if nextBlink != blinkingWindowIDs { blinkingWindowIDs = nextBlink }
 
         previousStates = newStates
         rows = newRows
     }
 
-    public func clearAnimation(for id: String) {
-        animatingWindowIDs.remove(id)
+    public func clearBlink(for id: String) {
+        blinkingWindowIDs.remove(id)
     }
 
     /// Row to show in compact mode. Prefers a needs-attention window (the most recent
