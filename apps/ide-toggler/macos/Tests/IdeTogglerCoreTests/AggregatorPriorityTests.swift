@@ -2,7 +2,7 @@ import XCTest
 @testable import IdeTogglerCore
 
 final class AggregatorPriorityTests: XCTestCase {
-    private let win = ZedWindow(id: "w1", folder: "proj")
+    private let win = EditorWindow(id: "w1", folder: "proj")
     private func sess(_ s: AgentStatus, pid: Int32 = 1) -> Session {
         Session(pid: pid, cwd: "/x/proj", status: s)
     }

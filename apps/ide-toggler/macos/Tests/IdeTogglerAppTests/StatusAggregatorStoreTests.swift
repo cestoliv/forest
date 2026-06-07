@@ -2,13 +2,18 @@ import XCTest
 @testable import IdeTogglerApp
 @testable import IdeTogglerCore
 
+private extension EditorWindow {
+    /// Test convenience: defaults ide to .zed (matching is IDE-agnostic here).
+    init(id: String, folder: String) { self.init(id: id, folder: folder, ide: .zed) }
+}
+
 // Local mocks (app target can't see core test target's Mocks.swift).
 private final class MockWindowSource: WindowSource {
-    var windows: [ZedWindow]; var onChange: (() -> Void)?
-    init(_ w: [ZedWindow]) { windows = w }
-    func currentWindows() -> [ZedWindow] { windows }
+    var windows: [EditorWindow]; var onChange: (() -> Void)?
+    init(_ w: [EditorWindow]) { windows = w }
+    func currentWindows() -> [EditorWindow] { windows }
     func start() {}
-    func emit(_ w: [ZedWindow]) { windows = w; onChange?() }
+    func emit(_ w: [EditorWindow]) { windows = w; onChange?() }
 }
 private final class MockSessionSource: SessionSource {
     var sessions: [Session]; var activityMap: [Int32: Date]; var onChange: (() -> Void)?
@@ -24,7 +29,7 @@ private final class SpyChime: ChimePlayer {
 
 final class StatusAggregatorStoreTests: XCTestCase {
     func test_initialRows_reflectJoinedState() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,
@@ -34,7 +39,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     }
 
     func test_workingToIdleTransition_callsChimeWhenUnmuted() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let chime = SpyChime()
         let store = StatusAggregatorStore(
@@ -46,7 +51,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     }
 
     func test_workingToIdleTransition_noChimeWhenMuted() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let chime = SpyChime()
         let store = StatusAggregatorStore(
@@ -59,7 +64,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
     func test_changingOrderMode_reorders() {
         let win = MockWindowSource([
-            ZedWindow(id: "w1", folder: "zeta"), ZedWindow(id: "w2", folder: "alpha")])
+            EditorWindow(id: "w1", folder: "zeta"), EditorWindow(id: "w2", folder: "alpha")])
         let sess = MockSessionSource([])
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,
@@ -72,7 +77,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
     func test_compactRow_picksMostRecentlyActive() {
         let win = MockWindowSource([
-            ZedWindow(id: "w1", folder: "alpha"), ZedWindow(id: "w2", folder: "beta")])
+            EditorWindow(id: "w1", folder: "alpha"), EditorWindow(id: "w2", folder: "beta")])
         let sess = MockSessionSource(
             [Session(pid: 1, cwd: "/x/alpha", status: .idle),
              Session(pid: 2, cwd: "/x/beta", status: .idle)],
@@ -86,7 +91,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
     func test_compactRow_prefersNeedsAttentionOverMoreRecent() {
         let win = MockWindowSource([
-            ZedWindow(id: "w1", folder: "alpha"), ZedWindow(id: "w2", folder: "beta")])
+            EditorWindow(id: "w1", folder: "alpha"), EditorWindow(id: "w2", folder: "beta")])
         let sess = MockSessionSource(
             [Session(pid: 1, cwd: "/x/alpha", status: .waiting),  // needsAttention, older
              Session(pid: 2, cwd: "/x/beta", status: .idle)],     // idle, more recent
@@ -100,7 +105,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
     func test_compactRow_fallsBackToFirstRowWhenNoActivity() {
         let win = MockWindowSource([
-            ZedWindow(id: "w1", folder: "zeta"), ZedWindow(id: "w2", folder: "alpha")])
+            EditorWindow(id: "w1", folder: "zeta"), EditorWindow(id: "w2", folder: "alpha")])
         let sess = MockSessionSource([])  // no sessions, no activity
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,
@@ -120,7 +125,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     }
 
     func test_compactModeToggle_doesNotChimeOrAnimate() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "alpha")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "alpha")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/alpha", status: .idle)])
         let chime = SpyChime()
         let store = StatusAggregatorStore(
@@ -140,7 +145,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     /// Carry-forward fix D: changing ONLY the order mode must NOT fire a chime and
     /// must NOT add to blinkingWindowIDs — order-mode switches are not transitions.
     func test_orderModeChange_doesNotChimeOrAnimate() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "alpha")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "alpha")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/alpha", status: .idle)])
         let chime = SpyChime()
         let store = StatusAggregatorStore(
@@ -162,7 +167,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     // MARK: - Blink ("last moved" attention cue)
 
     func test_workingToIdle_populatesBlinking() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,
@@ -174,7 +179,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
 
     func test_secondTransition_replacesBlinking() {
         let win = MockWindowSource([
-            ZedWindow(id: "w1", folder: "alpha"), ZedWindow(id: "w2", folder: "beta")])
+            EditorWindow(id: "w1", folder: "alpha"), EditorWindow(id: "w2", folder: "beta")])
         let sess = MockSessionSource([
             Session(pid: 1, cwd: "/x/alpha", status: .busy),
             Session(pid: 2, cwd: "/x/beta", status: .busy)])
@@ -195,7 +200,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     }
 
     func test_clearBlink_removesID() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,
@@ -208,7 +213,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     }
 
     func test_blinkClears_whenWindowLeavesIdle() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,
@@ -221,7 +226,7 @@ final class StatusAggregatorStoreTests: XCTestCase {
     }
 
     func test_blinkClears_whenWindowDisappears() {
-        let win = MockWindowSource([ZedWindow(id: "w1", folder: "proj")])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
         let store = StatusAggregatorStore(
             windowSource: win, sessionSource: sess,

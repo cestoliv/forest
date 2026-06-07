@@ -2,7 +2,7 @@ import XCTest
 @testable import IdeTogglerCore
 
 final class AggregatorOrderingTests: XCTestCase {
-    private func win(_ id: String, _ folder: String) -> ZedWindow { ZedWindow(id: id, folder: folder) }
+    private func win(_ id: String, _ folder: String) -> EditorWindow { EditorWindow(id: id, folder: folder) }
 
     func test_alphabetical_sortsByFolderCaseInsensitive() {
         let rows = [

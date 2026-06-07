@@ -8,12 +8,12 @@ public enum Aggregator {
     }
 
     /// Sessions whose cwd basename matches this window's folder.
-    static func sessions(for window: ZedWindow, in sessions: [Session]) -> [Session] {
+    static func sessions(for window: EditorWindow, in sessions: [Session]) -> [Session] {
         sessions.filter { basename(ofCwd: $0.cwd) == window.folder }
     }
 
     /// Collapse a window's matched sessions into one WindowState by priority.
-    public static func state(for window: ZedWindow, sessions allSessions: [Session]) -> WindowState {
+    public static func state(for window: EditorWindow, sessions allSessions: [Session]) -> WindowState {
         let matched = sessions(for: window, in: allSessions)
         if matched.isEmpty { return .noAgent }
         // Priority: needsAttention > working > idle (no-agent already excluded).
@@ -25,7 +25,7 @@ public enum Aggregator {
     /// Build ordered rows. `activity` maps session pid -> last-updated time so
     /// recently-active ordering and lastActive can be computed.
     public static func rows(
-        windows: [ZedWindow],
+        windows: [EditorWindow],
         sessions: [Session],
         mode: OrderMode,
         now: Date?,

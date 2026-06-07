@@ -1,13 +1,19 @@
 import Foundation
 @testable import IdeTogglerCore
 
+extension EditorWindow {
+    /// Test convenience: defaults ide to .zed so fixtures that don't exercise
+    /// per-IDE behaviour stay terse (matching is by folder, IDE-agnostic).
+    init(id: String, folder: String) { self.init(id: id, folder: folder, ide: .zed) }
+}
+
 final class MockWindowSource: WindowSource {
-    var windows: [ZedWindow]
+    var windows: [EditorWindow]
     var onChange: (() -> Void)?
-    init(_ windows: [ZedWindow] = []) { self.windows = windows }
-    func currentWindows() -> [ZedWindow] { windows }
+    init(_ windows: [EditorWindow] = []) { self.windows = windows }
+    func currentWindows() -> [EditorWindow] { windows }
     func start() {}
-    func emitChange(_ newWindows: [ZedWindow]) { windows = newWindows; onChange?() }
+    func emitChange(_ newWindows: [EditorWindow]) { windows = newWindows; onChange?() }
 }
 
 final class MockSessionSource: SessionSource {

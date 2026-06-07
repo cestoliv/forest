@@ -1,0 +1,7 @@
+{
+  "uuid": "ide-toggler@cestoliv.dev",
+  "name": "ide-toggler",
+  "description": "Always-on-top panel listing open editor windows (Zed/VSCode/WebStorm) with live Claude Code agent status per project. Click a row to raise its window. Also exposes a DBus window API for debugging.",
+  "shell-version": ["50", "49", "48", "47", "46", "45"],
+  "session-modes": ["user", "devkit"]
+}

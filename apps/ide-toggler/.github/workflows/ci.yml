@@ -7,8 +7,11 @@ on:
     branches: [main]
 
 jobs:
-  build-test:
+  macos:
     runs-on: macos-14
+    defaults:
+      run:
+        working-directory: macos
 
     steps:
       - uses: actions/checkout@v4
@@ -21,3 +24,22 @@ jobs:
 
       - name: Test
         run: swift test
+
+  linux:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Print Node version
+        run: node --version
+
+      - name: Test (pure extension logic)
+        run: node --test

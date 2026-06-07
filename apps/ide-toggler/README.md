@@ -20,6 +20,18 @@ ide-toggler sits as a floating, always-on-top panel. It enumerates your open Zed
 - **Three ordering modes** — sort the window list by status priority (default), alphabetically, or most-recently-active.
 - **Persistent settings** — order mode and mute preference are stored in `UserDefaults` and survive relaunches.
 
+## Repository layout
+
+The app is implemented natively per platform; all implementations follow one shared
+behavioral contract in [`SPEC.md`](SPEC.md).
+
+```
+SPEC.md     Cross-platform behavioral contract (the source of truth).
+macos/      macOS reference implementation — Swift Package (IdeTogglerCore +
+            IdeTogglerApp), built into IdeToggler.app via scripts/make_app.sh.
+linux/      GNOME Shell extension (GJS) + a Node test suite for its pure logic.
+```
+
 ## Requirements
 
 - **macOS 13 Ventura or later**
@@ -30,10 +42,11 @@ ide-toggler sits as a floating, always-on-top panel. It enumerates your open Zed
 ## Build & Run
 
 ```bash
+cd macos
 bash scripts/make_app.sh && open IdeToggler.app
 ```
 
-This compiles a release binary and assembles `IdeToggler.app` in the repository root, then launches it.
+This compiles a release binary and assembles `IdeToggler.app` inside `macos/`, then launches it.
 
 ### First Launch — Accessibility Permission
 
@@ -48,6 +61,8 @@ Without this permission the panel will open but the window list will remain empt
 ### Development
 
 ```bash
+cd macos
+
 # Build (debug)
 swift build
 

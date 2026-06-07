@@ -1,0 +1,202 @@
+/* ide-toggler — faithful St/CSS port of the macOS Native-Tahoe glass panel.
+ * Palette (from StatusIcon.swift):
+ *   terracotta   #E08763  rgb(224,135,99)
+ *   terracottaHi #F0A488  rgb(240,164,136)
+ *   cream        #F5EEE6  rgb(245,238,230)
+ *   idleRing     slate    rgb(225,230,240)
+ * St CSS has no backdrop blur, so glass is approximated with a dark translucent
+ * fill + a white@0.14 hairline border + a top specular sheen gradient.
+ */
+
+/* --- Surface ----------------------------------------------------------- */
+.ide-toggler-panel {
+    width: 300px;
+    /* Flat, uniform, slightly translucent fill — no gradient, no sheen. */
+    background-color: rgba(30, 30, 32, 0.95);
+    /* Thin white border for definition; no shadow. */
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 16px;
+    box-shadow: none;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.ide-toggler-panel-dragging {
+    background-color: rgba(34, 34, 36, 0.97);
+}
+
+.ide-toggler-scroll {
+    padding: 0;
+}
+
+.ide-toggler-scroll StScrollBar {
+    padding: 0;
+}
+
+/* Content area: 5px padding all around (macOS .padding(5)). */
+.ide-toggler-content {
+    padding: 5px;
+    spacing: 0;
+}
+
+.ide-toggler-empty {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    padding: 22px 0;
+}
+
+/* --- Group header (uppercase label + count pill) ----------------------- */
+.ide-toggler-group-header {
+    /* macOS: .padding(.top,12).horizontal(12).bottom(5), spacing 8. */
+    padding: 12px 12px 5px 12px;
+    spacing: 8px;
+}
+
+.ide-toggler-group-label {
+    font-size: 11px;
+    font-weight: 600;
+    /* tracking 0.6 in macOS -> letter-spacing 0.6px */
+    letter-spacing: 0.6px;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.ide-toggler-count-pill {
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    background-color: rgba(255, 255, 255, 0.10);
+    border-radius: 9px;
+    padding: 1px 5px;
+    min-width: 17px;
+    text-align: center;
+    /* The visual up-nudge is applied as a Clutter translation_y in _makeGroupHeader,
+       NOT a negative margin: a negative CSS margin underflows St's unsigned height
+       math to ~2^32 and blows up the whole panel's height. */
+}
+
+/* --- Compact header (inline counts joined by middots) ------------------ */
+.ide-toggler-compact-header {
+    padding: 10px 12px 5px 12px;
+    spacing: 6px;
+}
+
+.ide-toggler-compact-part {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.ide-toggler-compact-dot {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+/* --- Rows -------------------------------------------------------------- */
+.ide-toggler-row {
+    border-radius: 9px;
+    padding: 0;
+    transition-duration: 150ms;
+}
+
+.ide-toggler-row-box {
+    /* macOS: HStack spacing 11, .padding(.vertical,7).horizontal(9). */
+    spacing: 11px;
+    padding: 7px 9px;
+}
+
+.ide-toggler-row-name {
+    font-size: 13px;
+    color: rgba(255, 255, 255, 0.95);
+}
+
+/* Quiet rows (idle/noAgent) recede until hovered. */
+.ide-toggler-row-quiet .ide-toggler-row-name {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.ide-toggler-row:hover {
+    background-color: rgba(255, 255, 255, 0.09);
+}
+
+.ide-toggler-row:hover .ide-toggler-row-name {
+    color: rgba(255, 255, 255, 0.95);
+}
+
+/* Needs-attention rows get a faint terracotta hover tint (macOS). */
+.ide-toggler-row-needs:hover {
+    background-color: rgba(224, 135, 99, 0.13);
+}
+
+.ide-toggler-row:active {
+    background-color: rgba(224, 135, 99, 0.26);
+}
+
+.ide-toggler-row:focus {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Blink highlight for the most-recently working->idle window. */
+/* Solid terracotta fill behind a blinking row; the pulse comes from the actor's
+   opacity being animated in _makeRow (Clutter looping transition), not CSS. */
+.ide-toggler-row-blink-bg {
+    background-color: rgb(224, 135, 99);
+    border-radius: 9px;
+}
+
+.ide-toggler-chevron {
+    color: rgba(255, 255, 255, 0.55);
+}
+
+/* --- IDE badge --------------------------------------------------------- */
+.ide-toggler-badge {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    color: rgba(255, 255, 255, 0.45);
+    background-color: rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 1px 4px;
+}
+
+/* --- Footer (grip handle + compact/gear/close, top divider white@0.07) - */
+.ide-toggler-footer {
+    padding: 5px 8px;
+    spacing: 2px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* Dedicated drag grip (left of footer). Subtle dots; brighter on hover with a
+ * move/grab cursor so it reads as draggable. */
+.ide-toggler-grip {
+    color: rgba(255, 255, 255, 0.35);
+    padding: 0 6px;
+}
+
+.ide-toggler-grip:hover {
+    color: rgba(255, 255, 255, 0.75);
+}
+
+.ide-toggler-footer-btn {
+    border-radius: 8px;
+    width: 30px;
+    height: 30px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.ide-toggler-footer-btn:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+    color: rgba(255, 255, 255, 0.95);
+}
+
+.ide-toggler-footer-btn:active {
+    background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* --- Settings popup menu ----------------------------------------------- */
+/* The gear PopupMenu uses the system LIGHT theme (white bg, dark items), so the
+ * section header must be DARK to be readable next to the menu items. */
+.ide-toggler-settings-menu .ide-toggler-menu-header {
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0.4px;
+    color: rgba(0, 0, 0, 0.6);
+}

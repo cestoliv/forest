@@ -1,8 +1,8 @@
 import Foundation
 
-/// Supplies the current set of Zed windows (AX adapter in app target).
+/// Supplies the current set of editor windows (AX adapter in app target).
 public protocol WindowSource: AnyObject {
-    func currentWindows() -> [ZedWindow]
+    func currentWindows() -> [EditorWindow]
     /// Called by the source when the window set may have changed.
     var onChange: (() -> Void)? { get set }
     func start()
@@ -18,7 +18,7 @@ public protocol SessionSource: AnyObject {
     func start()
 }
 
-/// Raises/focuses a window by its ZedWindow.id. Only mutating system op allowed.
+/// Raises/focuses a window by its EditorWindow.id. Only mutating system op allowed.
 public protocol WindowRaising: AnyObject {
     func raise(windowID: String)
 }

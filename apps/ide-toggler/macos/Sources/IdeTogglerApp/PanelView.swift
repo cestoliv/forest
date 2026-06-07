@@ -40,6 +40,12 @@ public struct PanelView: View {
         store.settings.orderMode == .statusPriority
     }
 
+    // The per-row IDE badge only disambiguates between editors, so it's pointless
+    // (and noise) when every window belongs to the same IDE — the common case.
+    private var showsIDEBadges: Bool {
+        Set(store.rows.map(\.window.ide)).count > 1
+    }
+
     // In status-priority mode rows arrive grouped by status, so walk them once and
     // split into consecutive groups while preserving order. Each StatusGroup appears
     // at most once (same-status rows are adjacent), keeping the ForEach IDs unique.
@@ -79,7 +85,7 @@ public struct PanelView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if store.rows.isEmpty {
-                Text("No Zed windows")
+                Text("No editor windows")
                     .font(.system(size: 12.5))
                     .foregroundStyle(.white.opacity(0.5))
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -126,6 +132,7 @@ public struct PanelView: View {
         GlassRow(
             row: row,
             blinking: store.blinkingWindowIDs.contains(row.window.id),
+            showIDEBadge: showsIDEBadges,
             onTap: {
                 store.clearBlink(for: row.window.id)
                 raiser.raise(windowID: row.window.id)
@@ -186,6 +193,7 @@ private struct CompactHeader: View {
 private struct GlassRow: View {
     let row: WindowRow
     let blinking: Bool
+    let showIDEBadge: Bool
     let onTap: () -> Void
     @State private var hovering = false
 
@@ -218,11 +226,20 @@ private struct GlassRow: View {
 
                 Spacer(minLength: 4)
 
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
-                    .opacity(hovering ? 1 : 0)
-                    .offset(x: hovering ? 0 : -4)
+                if showIDEBadge {
+                    ideBadge(for: row.window.ide)
+                }
+
+                // Chevron is only in the layout while hovering, so the IDE badge sits
+                // flush to the right edge at rest. On hover it slides in from the trailing
+                // edge, pushing the badge left to make room (animated via the row's
+                // `.animation(value: hovering)` below).
+                if hovering {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
             }
             .padding(.vertical, 7)
             .padding(.horizontal, 9)

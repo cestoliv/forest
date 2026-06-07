@@ -12,6 +12,31 @@ enum Palette {
     static let idleRing     = Color(red: 225/255, green: 230/255, blue: 240/255) // slate, used dimmed
 }
 
+// MARK: - IDE badge
+/// Tiny monogram chip identifying which editor a row's window belongs to. Subtle
+/// by design — it only matters when the same project is open in more than one IDE.
+extension IDEKind {
+    var badgeLabel: String {
+        switch self {
+        case .zed:       return "ZED"
+        case .vscode:    return "VS"
+        case .jetBrains: return "WS"
+        }
+    }
+}
+
+func ideBadge(for ide: IDEKind) -> some View {
+    Text(ide.badgeLabel)
+        .font(.system(size: 9, weight: .semibold))
+        .tracking(0.3)
+        .foregroundStyle(.white.opacity(0.45))
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1.5)
+        .background(
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(.white.opacity(0.08)))
+}
+
 // MARK: - Status icon factory
 /// The visual mark for a window's collapsed agent state. No green checks:
 /// `needs` is the only saturated mark, `working` shows motion, `idle`/`noAgent`
