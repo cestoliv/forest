@@ -64,6 +64,9 @@ public final class AXWindowSource: WindowSource {
                             // relying on array index, though folders collide if duplicated within a pid.
                             id = "\(editor.kind.rawValue)-\(app.processIdentifier)-\(folder)"
                         }
+                        // Skip if id is already taken: _AXUIElementGetWindow fallback can
+                        // produce colliding ids for same-folder windows when the SPI fails.
+                        guard newElements[id] == nil else { continue }
                         windows.append(EditorWindow(id: id, folder: folder, ide: editor.kind))
                         newElements[id] = axWindow
                     }

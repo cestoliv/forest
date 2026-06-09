@@ -103,6 +103,6 @@ public enum Aggregator {
 
     /// Convenience: snapshot of id -> state for a set of rows.
     public static func stateSnapshot(rows: [WindowRow]) -> [String: WindowState] {
-        Dictionary(uniqueKeysWithValues: rows.map { ($0.window.id, $0.state) })
+        Dictionary(rows.map { ($0.window.id, $0.state) }, uniquingKeysWith: { _, new in new })
     }
 }
