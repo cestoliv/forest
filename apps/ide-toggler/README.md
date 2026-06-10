@@ -1,22 +1,22 @@
 # ide-toggler
 
-A native macOS panel that shows every open Zed window alongside its live Claude Code activity state, so you always know at a glance which project needs your attention — and can jump to it with a single click.
+A native macOS panel that shows every open editor window alongside its live Claude Code or Codex activity state, so you always know at a glance which project needs your attention — and can jump to it with a single click.
 
 <!-- TODO: add screenshot of the panel -->
 
-ide-toggler sits as a floating, always-on-top panel. It enumerates your open Zed windows by project folder name, watches Claude Code's session files in real time, and highlights any window where Claude is blocked, busy, or done. When a session finishes and goes idle it plays a chime and runs an icon animation so you notice even if the panel is out of focus.
+ide-toggler sits as a floating, always-on-top panel. It enumerates your open editor windows by project folder name, watches Claude Code and Codex session state in real time, and highlights any window where an agent is blocked, busy, or done. When a session finishes and goes idle it plays a chime and runs an icon animation so you notice even if the panel is out of focus.
 
 ## Features
 
-- **Window list by folder** — every open Zed window appears as a row labelled by its project folder name. Works across multiple Zed instances.
-- **Click to raise** — click any row to bring that Zed window to the front and focus it, even if it is on another Space.
-- **Four live states**, updated in real time as Claude Code sessions change:
-  - `needs-attention` — at least one session is waiting on a permission prompt (Claude blocked)
+- **Window list by folder** — every open Zed, VSCode, or WebStorm window appears as a row labelled by its project folder name.
+- **Click to raise** — click any row to bring that editor window to the front and focus it, even if it is on another Space.
+- **Four live states**, updated in real time as Claude Code or Codex sessions change:
+  - `needs-attention` — at least one session is waiting on a permission prompt or user input
   - `working` — at least one session is actively computing or running a shell command
   - `idle` — all sessions for this window are waiting for your next message
-  - `no-agent` — the window is open but no Claude Code session is associated with it
+  - `no-agent` — the window is open but no supported agent session is associated with it
 - **Idle chime + animation** — when a window transitions from working to idle, the macOS "Glass" sound plays and the status icon animates. The animation always runs; the sound can be muted.
-- **Always-on-top floating panel** — uses a non-activating `NSPanel` at floating level that joins all Spaces, so it stays visible without ever stealing focus from Zed.
+- **Always-on-top floating panel** — uses a non-activating `NSPanel` at floating level that joins all Spaces, so it stays visible without ever stealing focus from the editor.
 - **Three ordering modes** — sort the window list by status priority (default), alphabetically, or most-recently-active.
 - **Persistent settings** — order mode and mute preference are stored in `UserDefaults` and survive relaunches.
 
@@ -36,8 +36,8 @@ linux/      GNOME Shell extension (GJS) + a Node test suite for its pure logic.
 
 - **macOS 13 Ventura or later**
 - **Swift 5.9+ / Xcode** (for building from source)
-- **Accessibility permission** — required to enumerate and raise Zed windows (see First Launch below)
-- **Claude Code running inside Zed's integrated terminal** — ide-toggler reads session files from `~/.claude/sessions/{pid}.json`. Sessions started in an external terminal are ignored unless their working directory matches a Zed window folder.
+- **Accessibility permission** — required to enumerate and raise editor windows (see First Launch below)
+- **Claude Code or Codex** — Claude Code is read from `~/.claude/sessions/{pid}.json`; Codex is read from `~/.codex/sessions/**/*.jsonl` and filtered to live Codex process working directories. Sessions are associated with windows by matching the session cwd basename or an exact cwd path component to the editor window folder.
 
 ## Build & Run
 
@@ -50,7 +50,7 @@ This compiles a release binary and assembles `IdeToggler.app` inside `macos/`, t
 
 ### First Launch — Accessibility Permission
 
-The app needs Accessibility access to list and raise Zed windows. On first launch an alert will appear with an **Open System Settings** button. Alternatively:
+The app needs Accessibility access to list and raise editor windows. On first launch an alert will appear with an **Open System Settings** button. Alternatively:
 
 1. Open **System Settings → Privacy & Security → Accessibility**
 2. Enable **ide-toggler** (or **IdeToggler**)
@@ -103,18 +103,19 @@ click from [extensions.gnome.org](https://extensions.gnome.org/).
 
 ## How It Works
 
-1. **Window enumeration** — the macOS Accessibility API (`AXUIElementCreateApplication`) is called for each running `dev.zed.Zed` process. Each window's title is parsed on the `" — "` (em-dash) separator to extract the project folder name, and each window is keyed by its stable `CGWindowID` for reliable click-to-raise.
-2. **Session watching** — FSEvents watches `~/.claude/sessions/`. On every change all `*.json` files are re-read. Files whose recorded PID no longer responds to `kill -0` (crashed Claude) are discarded. Each remaining file produces a `Session(pid, cwd, status)`.
-3. **Aggregation** — a pure `StatusAggregator` joins windows to sessions on `basename(session.cwd) == window.folder`. Multiple sessions for the same window collapse to a single `WindowState` by priority: `needs-attention > working > idle > no-agent`. The aggregator also detects `working → idle` transitions per window and fires the chime/animation.
+1. **Window enumeration** — the macOS Accessibility API (`AXUIElementCreateApplication`) is called for each configured editor process. Each window title is parsed using the editor-specific strategy to extract the project folder name, and each window is keyed by its stable `CGWindowID` for reliable click-to-raise.
+2. **Session watching** — FSEvents watches Claude and Codex session directories. Claude JSON files are liveness-filtered by PID. Codex JSONL rollouts are interpreted from lifecycle events and filtered to currently running Codex process working directories. Each remaining record produces a `Session(pid, cwd, status)`.
+3. **Aggregation** — a pure `StatusAggregator` joins windows to sessions when the session cwd basename or one exact cwd path component equals the window folder. Multiple sessions for the same window collapse to a single `WindowState` by priority: `needs-attention > working > idle > no-agent`. The aggregator also detects `working → idle` transitions per window and fires the chime/animation.
 
 ## Architecture
 
 ```
 IdeTogglerCore          Pure Swift — models, aggregation logic, protocols.
-                        Fully unit-tested (52 tests), no AppKit/AX imports.
+                        Fully unit-tested, no AppKit/AX imports.
 
 IdeTogglerApp           OS adapters + SwiftUI UI.
-                        AXWindowSource, FSEventSessionSource, AVAudioChimePlayer,
+                        AXWindowSource, CompositeSessionSource, Claude/Codex session sources,
+                        AVAudioChimePlayer,
                         StatusAggregatorStore (ObservableObject), PanelController,
                         PanelView, SettingsView.
 
@@ -128,10 +129,10 @@ The adapter/protocol split means the core aggregation logic is tested with light
 
 ide-toggler is **strictly read-only with respect to your windows and processes**. It:
 
-- reads window titles and session JSON files
+- reads window titles, session files, and process cwd metadata
 - raises/focuses a window when you click its row
 
-It **never** closes, quits, sends input to, or otherwise mutates any Zed window, Claude process, or file. This constraint is enforced throughout the codebase (see the Hard Safety Constraint in the design spec).
+It **never** closes, quits, sends input to, or otherwise mutates any editor window, agent process, or file. This constraint is enforced throughout the codebase (see the Hard Safety Constraint in the design spec).
 
 ## License
 

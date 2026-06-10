@@ -2,7 +2,7 @@
 // bookkeeping (SPEC §5 and §7). PURE logic — unit-testable under Node. Mirrors
 // the macOS Aggregator in Sources/IdeTogglerCore/Aggregator.swift.
 
-import {basenameOfCwd} from './sessions.js';
+import {cwdMatchesFolder} from './sessions.js';
 
 export const ORDER_MODES = ['statusPriority', 'alphabetical', 'recentlyActive'];
 
@@ -47,7 +47,7 @@ export function groupForState(state) {
 export function buildRows({windows, sessions, activity, orderMode}) {
     const act = activity ?? new Map();
     const rows = windows.map(w => {
-        const matched = sessions.filter(s => basenameOfCwd(s.cwd) === w.folder);
+        const matched = sessions.filter(s => cwdMatchesFolder(s.cwd, w.folder));
         const state = collapseState(matched.map(s => s.status));
         let lastActive = -Infinity;
         for (const s of matched) {
@@ -105,22 +105,25 @@ export function compactRow(rows) {
     return mostRecent(rows) ?? rows[0] ?? null;
 }
 
-// Window ids that just went working -> idle (the §5 transition cue trigger).
+// Window ids that just went working -> the quiet idle group (the §5 transition
+// cue trigger). Codex can disappear as a live session immediately after writing
+// task completion, which surfaces as noAgent rather than a literal idle session.
 //   prevStates, newStates: Map<windowId, state>
 export function detectTransitions(prevStates, newStates) {
     const transitions = [];
     for (const [id, state] of newStates) {
-        if (state === 'idle' && prevStates.get(id) === 'working')
+        if ((state === 'idle' || state === 'noAgent') && prevStates.get(id) === 'working')
             transitions.push(id);
     }
     return transitions;
 }
 
-// Next set of blinking window ids: keep existing blinkers that are still idle,
-// but a fresh batch of transitions replaces them entirely.
+// Next set of blinking window ids: keep existing blinkers that are still in the
+// quiet idle group, but a fresh batch of transitions replaces them entirely.
 export function nextBlinkSet(currentBlinking, rows, transitions) {
-    const idleIds = new Set(rows.filter(r => r.state === 'idle').map(r => r.window.id));
-    let next = new Set([...currentBlinking].filter(id => idleIds.has(id)));
+    const quietIds = new Set(
+        rows.filter(r => r.state === 'idle' || r.state === 'noAgent').map(r => r.window.id));
+    let next = new Set([...currentBlinking].filter(id => quietIds.has(id)));
     if (transitions.length)
         next = new Set(transitions);
     return next;

@@ -55,11 +55,12 @@ public final class StatusAggregatorStore: ObservableObject {
         let transitions = Aggregator.workingToIdleTransitions(
             previous: previousStates, current: newStates)
 
-        // Prune blinkers that disappeared or are no longer idle (clear-on-any-change /
-        // clear-on-close). A new working->idle transition then replaces the set, so the
-        // "last moved" project blinks and any previous blinker stops.
-        let idleIDs = Set(newRows.filter { $0.state == .idle }.map(\.window.id))
-        var nextBlink = blinkingWindowIDs.intersection(idleIDs)
+        // Prune blinkers that disappeared or are no longer in the quiet idle group
+        // (clear-on-any-change / clear-on-close). A new working->idle-group transition
+        // then replaces the set, so the "last moved" project blinks and any previous
+        // blinker stops.
+        let quietIDs = Set(newRows.filter { $0.state == .idle || $0.state == .noAgent }.map(\.window.id))
+        var nextBlink = blinkingWindowIDs.intersection(quietIDs)
         if !transitions.isEmpty {
             nextBlink = Set(transitions)
             if !settings.muted { chime.playChime() }  // blink always shows; sound respects mute

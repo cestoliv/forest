@@ -10,7 +10,12 @@ import { Extension } from "resource:///org/gnome/shell/extensions/extension.js";
 
 import { editorForWmClass } from "./lib/editors.js";
 import { folderFromTitle } from "./lib/titleParser.js";
-import { parseSessionObject } from "./lib/sessions.js";
+import {
+  latestCodexSessionsByCwd,
+  normalizePath,
+  parseCodexRolloutJsonl,
+  parseSessionObject,
+} from "./lib/sessions.js";
 import {
   ORDER_MODES,
   groupForState,
@@ -138,11 +143,17 @@ export default class IdeTogglerExtension extends Extension {
     }
 
     // --- session source ---
-    this._sessionsDir = GLib.build_filenamev([
+    this._claudeSessionsDir = GLib.build_filenamev([
       GLib.get_home_dir(),
       ".claude",
       "sessions",
     ]);
+    this._codexSessionsDir = GLib.build_filenamev([
+      GLib.get_home_dir(),
+      ".codex",
+      "sessions",
+    ]);
+    this._sessionMonitors = [];
     this._setupSessionMonitor();
     this._reloadSessions();
 
@@ -248,21 +259,18 @@ export default class IdeTogglerExtension extends Extension {
 
   // --- session monitoring ---
   _setupSessionMonitor() {
-    try {
-      const dir = Gio.File.new_for_path(this._sessionsDir);
-      this._sessionMonitor = dir.monitor_directory(
-        Gio.FileMonitorFlags.NONE,
-        null,
-      );
-      this._signalIds.push([
-        this._sessionMonitor,
-        this._sessionMonitor.connect("changed", () =>
-          this._scheduleSessionReload(),
-        ),
-      ]);
-    } catch (e) {
-      logError(e, "ide-toggler: failed to monitor sessions dir");
-      this._sessionMonitor = null;
+    for (const path of [this._claudeSessionsDir, this._codexSessionsDir]) {
+      try {
+        const dir = Gio.File.new_for_path(path);
+        const monitor = dir.monitor_directory(Gio.FileMonitorFlags.NONE, null);
+        this._sessionMonitors.push(monitor);
+        this._signalIds.push([
+          monitor,
+          monitor.connect("changed", () => this._scheduleSessionReload()),
+        ]);
+      } catch (e) {
+        logError(e, `ide-toggler: failed to monitor sessions dir ${path}`);
+      }
     }
   }
 
@@ -288,9 +296,16 @@ export default class IdeTogglerExtension extends Extension {
   _reloadSessions() {
     const sessions = [];
     const activity = new Map();
+    this._reloadClaudeSessions(sessions, activity);
+    this._reloadCodexSessions(sessions, activity);
+    this._sessions = sessions;
+    this._activity = activity;
+  }
+
+  _reloadClaudeSessions(sessions, activity) {
     let dirEnum = null;
     try {
-      const dir = Gio.File.new_for_path(this._sessionsDir);
+      const dir = Gio.File.new_for_path(this._claudeSessionsDir);
       dirEnum = dir.enumerate_children(
         "standard::name",
         Gio.FileQueryInfoFlags.NONE,
@@ -300,7 +315,7 @@ export default class IdeTogglerExtension extends Extension {
       while ((info = dirEnum.next_file(null)) !== null) {
         const name = info.get_name();
         if (!name.endsWith(".json")) continue;
-        const path = GLib.build_filenamev([this._sessionsDir, name]);
+        const path = GLib.build_filenamev([this._claudeSessionsDir, name]);
         const session = this._parseSession(path);
         if (!session) continue;
         if (!this._pidAlive(session.pid)) continue;
@@ -319,20 +334,122 @@ export default class IdeTogglerExtension extends Extension {
         }
       }
     }
-    this._sessions = sessions;
-    this._activity = activity;
   }
 
   _parseSession(path) {
     try {
-      const file = Gio.File.new_for_path(path);
-      const [ok, contents] = file.load_contents(null);
-      if (!ok) return null;
-      const obj = JSON.parse(new TextDecoder().decode(contents));
+      const obj = JSON.parse(this._readTextFile(path));
       return parseSessionObject(obj);
     } catch (_e) {
       return null;
     }
+  }
+
+  _reloadCodexSessions(sessions, activity) {
+    const liveWorkspaces = this._liveCodexWorkspaces();
+    if (!liveWorkspaces.size) return;
+    const codexSessions = [];
+    for (const path of this._codexRolloutPaths(this._codexSessionsDir)) {
+      try {
+        const session = parseCodexRolloutJsonl(
+          this._readTextFile(path),
+          liveWorkspaces,
+        );
+        if (!session) continue;
+        codexSessions.push(session);
+      } catch (_e) {
+        // unreadable/corrupt rollout -> ignore
+      }
+    }
+    for (const session of latestCodexSessionsByCwd(codexSessions)) {
+      sessions.push(session);
+      if (Number.isFinite(session.updatedAt))
+        activity.set(session.pid, session.updatedAt);
+    }
+  }
+
+  _readTextFile(path) {
+    const file = Gio.File.new_for_path(path);
+    const [ok, contents] = file.load_contents(null);
+    if (!ok) throw new Error(`failed to read ${path}`);
+    return new TextDecoder().decode(contents);
+  }
+
+  _codexRolloutPaths(rootPath) {
+    const result = [];
+    const visit = (dirPath) => {
+      let dirEnum = null;
+      try {
+        const dir = Gio.File.new_for_path(dirPath);
+        dirEnum = dir.enumerate_children(
+          "standard::name,standard::type",
+          Gio.FileQueryInfoFlags.NONE,
+          null,
+        );
+        let info;
+        while ((info = dirEnum.next_file(null)) !== null) {
+          const name = info.get_name();
+          const path = GLib.build_filenamev([dirPath, name]);
+          if (info.get_file_type() === Gio.FileType.DIRECTORY) visit(path);
+          else if (name.endsWith(".jsonl")) result.push(path);
+        }
+      } catch (_e) {
+        // missing/unreadable directory -> no rollouts
+      } finally {
+        if (dirEnum) {
+          try {
+            dirEnum.close(null);
+          } catch (_e) {
+            /* ignore */
+          }
+        }
+      }
+    };
+    visit(rootPath);
+    return result;
+  }
+
+  _liveCodexWorkspaces() {
+    const workspaces = new Set();
+    let procEnum = null;
+    try {
+      const proc = Gio.File.new_for_path("/proc");
+      procEnum = proc.enumerate_children(
+        "standard::name,standard::type",
+        Gio.FileQueryInfoFlags.NONE,
+        null,
+      );
+      let info;
+      while ((info = procEnum.next_file(null)) !== null) {
+        const pid = info.get_name();
+        if (!/^\d+$/.test(pid) || info.get_file_type() !== Gio.FileType.DIRECTORY)
+          continue;
+        let comm;
+        try {
+          comm = this._readTextFile(`/proc/${pid}/comm`).trim();
+        } catch (_e) {
+          continue;
+        }
+        if (comm !== "codex") continue;
+        try {
+          const cwd = GLib.file_read_link(`/proc/${pid}/cwd`);
+          if (cwd) workspaces.add(normalizePath(cwd));
+        } catch (_e) {
+          // process exited or cwd not visible
+        }
+      }
+    } catch (_e) {
+      // /proc unavailable -> no live Codex sessions
+    } finally {
+      if (procEnum) {
+        try {
+          procEnum.close(null);
+        } catch (_e) {
+          /* ignore */
+        }
+      }
+    }
+    return workspaces;
   }
 
   // --- window enumeration ---
@@ -1103,13 +1220,15 @@ export default class IdeTogglerExtension extends Extension {
       this._windowSignals = null;
     }
 
-    if (this._sessionMonitor) {
-      try {
-        this._sessionMonitor.cancel();
-      } catch (_e) {
-        /* ignore */
+    if (this._sessionMonitors) {
+      for (const monitor of this._sessionMonitors) {
+        try {
+          monitor.cancel();
+        } catch (_e) {
+          /* ignore */
+        }
       }
-      this._sessionMonitor = null;
+      this._sessionMonitors = null;
     }
 
     if (this._settingsMenu) {

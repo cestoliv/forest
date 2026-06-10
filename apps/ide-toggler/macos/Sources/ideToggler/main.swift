@@ -12,7 +12,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settingsStore = UserDefaultsSettingsStore()
         let windowSource = AXWindowSource()
         let raiser = AXWindowRaiser(source: windowSource)
-        let sessionSource = FSEventSessionSource()
+        let sessionSource = CompositeSessionSource([
+            FSEventSessionSource(),
+            FSEventCodexSessionSource(),
+        ])
         let chime = AVAudioChimePlayer()
 
         let store = StatusAggregatorStore(
@@ -37,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Accessibility permission needed"
         alert.informativeText = """
-        ide-toggler needs Accessibility access to list and raise Zed windows.
+        ide-toggler needs Accessibility access to list and raise editor windows.
         Open System Settings → Privacy & Security → Accessibility and enable ide-toggler.
         """
         alert.addButton(withTitle: "Open System Settings")

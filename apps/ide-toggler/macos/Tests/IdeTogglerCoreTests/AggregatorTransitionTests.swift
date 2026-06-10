@@ -8,6 +8,12 @@ final class AggregatorTransitionTests: XCTestCase {
         XCTAssertEqual(Aggregator.workingToIdleTransitions(previous: prev, current: curr), ["w1"])
     }
 
+    func test_workingToNoAgent_emitsTransitionForThatWindow() {
+        let prev: [String: WindowState] = ["w1": .working]
+        let curr: [String: WindowState] = ["w1": .noAgent]
+        XCTAssertEqual(Aggregator.workingToIdleTransitions(previous: prev, current: curr), ["w1"])
+    }
+
     func test_stayingWorking_emitsNothing() {
         let prev: [String: WindowState] = ["w1": .working]
         let curr: [String: WindowState] = ["w1": .working]
@@ -32,10 +38,16 @@ final class AggregatorTransitionTests: XCTestCase {
         XCTAssertEqual(Aggregator.workingToIdleTransitions(previous: prev, current: curr), [])
     }
 
+    func test_newWindowAppearingNoAgent_emitsNothing() {
+        let prev: [String: WindowState] = [:]
+        let curr: [String: WindowState] = ["w1": .noAgent]
+        XCTAssertEqual(Aggregator.workingToIdleTransitions(previous: prev, current: curr), [])
+    }
+
     func test_multipleWindows_onlyTransitioningOnesEmit() {
         let prev: [String: WindowState] = ["w1": .working, "w2": .working, "w3": .idle]
-        let curr: [String: WindowState] = ["w1": .idle,    "w2": .working, "w3": .working]
-        XCTAssertEqual(Aggregator.workingToIdleTransitions(previous: prev, current: curr), ["w1"])
+        let curr: [String: WindowState] = ["w1": .idle,    "w2": .noAgent, "w3": .working]
+        XCTAssertEqual(Aggregator.workingToIdleTransitions(previous: prev, current: curr), ["w1", "w2"])
     }
 
     func test_windowDisappearing_emitsNothing() {

@@ -5,7 +5,7 @@ import IdeTogglerCore
 
 /// Raises/focuses a window. SAFETY: the ONLY mutating system call in the whole app is
 /// AXUIElementPerformAction(_, kAXRaiseAction) + NSRunningApplication.activate.
-/// Never call any other AX action, and never test this against a real Zed window.
+/// Never call any other AX action, and never test this against a real editor window.
 public final class AXWindowRaiser: WindowRaising {
     private weak var source: AXWindowSource?
     public init(source: AXWindowSource) { self.source = source }

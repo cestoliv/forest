@@ -59,6 +59,17 @@ test('buildRows leaves an unmatched window at noAgent', () => {
     assert.equal(rows[0].state, 'noAgent');
 });
 
+test('buildRows matches a nested session cwd to the project root window', () => {
+    const rows = buildRows({
+        windows: [win('zed-win-1', 'ide-toggler-support-codex')],
+        sessions: [session(1, '/Users/me/Development/ide-toggler-support-codex/macos', 'waiting')],
+        activity: new Map([[1, 500]]),
+        orderMode: 'statusPriority',
+    });
+    assert.equal(rows[0].state, 'needsAttention');
+    assert.equal(rows[0].lastActive, 500);
+});
+
 test('buildRows: same folder open in two editors matches both windows', () => {
     const rows = buildRows({
         windows: [win('zed-win-1', 'mobile', 'zed'), win('vscode-win-2', 'mobile', 'vscode')],
@@ -68,6 +79,20 @@ test('buildRows: same folder open in two editors matches both windows', () => {
     });
     assert.equal(rows.length, 2);
     assert.ok(rows.every(r => r.state === 'needsAttention'));
+});
+
+test('buildRows combines Claude and Codex sessions with existing priority', () => {
+    const rows = buildRows({
+        windows: [win('zed-win-1', 'mobile')],
+        sessions: [
+            session(1, '/x/mobile', 'idle'),
+            session(2, '/x/mobile', 'busy'),
+        ],
+        activity: new Map([[1, 100], [2, 200]]),
+        orderMode: 'statusPriority',
+    });
+    assert.equal(rows[0].state, 'working');
+    assert.equal(rows[0].lastActive, 200);
 });
 
 // --- buildRows: ordering (§7) -----------------------------------------------
@@ -140,9 +165,15 @@ test('compactRow returns null on empty input', () => {
 });
 
 // --- transitions / blink ----------------------------------------------------
-test('detectTransitions reports only working -> idle', () => {
+test('detectTransitions reports working -> quiet idle-group states', () => {
     const prev = new Map([['a', 'working'], ['b', 'idle'], ['c', 'needsAttention']]);
-    const next = new Map([['a', 'idle'], ['b', 'idle'], ['c', 'idle']]);
+    const next = new Map([['a', 'idle'], ['b', 'noAgent'], ['c', 'idle']]);
+    assert.deepEqual(detectTransitions(prev, next), ['a']);
+});
+
+test('detectTransitions reports working -> noAgent', () => {
+    const prev = new Map([['a', 'working']]);
+    const next = new Map([['a', 'noAgent']]);
     assert.deepEqual(detectTransitions(prev, next), ['a']);
 });
 
@@ -152,13 +183,20 @@ test('detectTransitions: a brand-new idle window is not a transition', () => {
     assert.deepEqual(detectTransitions(prev, next), []);
 });
 
-test('nextBlinkSet keeps existing idle blinkers and drops non-idle/gone ones', () => {
+test('detectTransitions: a brand-new noAgent window is not a transition', () => {
+    const prev = new Map();
+    const next = new Map([['a', 'noAgent']]);
+    assert.deepEqual(detectTransitions(prev, next), []);
+});
+
+test('nextBlinkSet keeps existing quiet blinkers and drops non-quiet/gone ones', () => {
     const rows = [
         {window: win('a', 'a'), state: 'idle'},
+        {window: win('c', 'c'), state: 'noAgent'},
         {window: win('b', 'b'), state: 'working'},
     ];
-    const next = nextBlinkSet(new Set(['a', 'b', 'gone']), rows, []);
-    assert.deepEqual([...next], ['a']); // b left idle, gone disappeared
+    const next = nextBlinkSet(new Set(['a', 'b', 'c', 'gone']), rows, []);
+    assert.deepEqual([...next], ['a', 'c']); // b left quiet, gone disappeared
 });
 
 test('nextBlinkSet: a fresh transition replaces the blink set entirely', () => {

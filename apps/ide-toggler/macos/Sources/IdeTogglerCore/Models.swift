@@ -3,7 +3,7 @@ import Foundation
 /// Marker for smoke test — kept after Task 1 replaces the placeholder.
 public enum IdeTogglerCoreMarker { case ok }
 
-/// Raw status strings written by Claude Code sessions.
+/// Normalized raw status strings from supported agent sessions.
 public enum AgentStatus: String, Equatable, Sendable {
     case busy
     case shell
@@ -19,7 +19,7 @@ public enum WindowState: String, Equatable, Sendable, CaseIterable {
     case noAgent          // no session for this window
 }
 
-/// A decoded Claude session (already liveness-filtered upstream).
+/// A decoded agent session (already stale-filtered upstream).
 public struct Session: Equatable, Sendable {
     public let pid: Int32
     public let cwd: String

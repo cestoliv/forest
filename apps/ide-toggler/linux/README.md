@@ -15,7 +15,7 @@ gnome-extension/ide-toggler@cestoliv.com/
 ├── lib/
 │   ├── editors.js      Editor catalog + WM_CLASS lookup            (pure)
 │   ├── titleParser.js  Title → folder parsing + blocklist          (pure)
-│   ├── sessions.js     Session validation + cwd basename           (pure)
+│   ├── sessions.js     Claude/Codex session parsing + cwd helpers  (pure)
 │   ├── aggregator.js   Join / collapse / order / transition / blink (pure)
 │   ├── statusIcons.js  Cairo status icons + looping animations     (gi: St/Clutter/Cairo)
 │   └── indicator.js    Top-bar indicator                           (gi: St/PanelMenu)

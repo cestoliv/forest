@@ -7,9 +7,18 @@ public enum Aggregator {
         return (trimmed as NSString).lastPathComponent
     }
 
-    /// Sessions whose cwd basename matches this window's folder.
+    /// A session started inside a project subdirectory should still attach to the
+    /// editor window for the project root, whose title usually exposes only the
+    /// root folder name.
+    static func cwd(_ cwd: String, matchesFolder folder: String) -> Bool {
+        guard !folder.isEmpty else { return false }
+        if basename(ofCwd: cwd) == folder { return true }
+        return (cwd as NSString).pathComponents.contains(folder)
+    }
+
+    /// Sessions whose cwd matches this window's folder.
     static func sessions(for window: EditorWindow, in sessions: [Session]) -> [Session] {
-        sessions.filter { basename(ofCwd: $0.cwd) == window.folder }
+        sessions.filter { cwd($0.cwd, matchesFolder: window.folder) }
     }
 
     /// Collapse a window's matched sessions into one WindowState by priority.
@@ -76,14 +85,17 @@ public enum Aggregator {
         }
     }
 
-    /// Window ids that moved specifically from .working to .idle between snapshots.
+    /// Window ids that moved from .working back to the quiet idle group between
+    /// snapshots. Codex can disappear as a live session immediately after writing
+    /// task completion, which surfaces as .noAgent rather than a literal .idle.
     /// Returns a sorted array for deterministic test/notify behavior.
     public static func workingToIdleTransitions(
         previous: [String: WindowState],
         current: [String: WindowState]
     ) -> [String] {
         current.compactMap { id, state -> String? in
-            guard state == .idle, previous[id] == .working else { return nil }
+            guard (state == .idle || state == .noAgent),
+                  previous[id] == .working else { return nil }
             return id
         }
         .sorted()

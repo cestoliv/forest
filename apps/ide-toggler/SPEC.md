@@ -5,9 +5,9 @@ is the reference implementation; the Linux and Windows apps reimplement this log
 their own native stacks (no shared binary). Keep all three in sync with this document.
 
 The app is an always-on-top panel listing the open windows of supported editors, one row
-per window, each tagged with the project folder and the live Claude Code agent status for
+per window, each tagged with the project folder and the live supported-agent status for
 that project. Clicking a row raises/focuses that editor window. The app is **read-only**
-toward editors and Claude: the only outward action is raising a window.
+toward editors and agents: the only outward action is raising a window.
 
 ---
 
@@ -118,7 +118,17 @@ may parse wrong — the window still lists and is focusable, it just won't join 
 
 ---
 
-## 4. Session source (Claude Code agent status)
+## 4. Session sources (agent status)
+
+ide-toggler supports Claude Code and Codex. Both sources normalize into the same
+session shape:
+
+```
+Session { pid: int, cwd: string, status: AgentStatus }
+activity: map<pid, updatedAt>   // for recently-active ordering
+```
+
+### Claude Code
 
 Watch the directory `~/.claude/sessions/` (`%USERPROFILE%\.claude\sessions\` on Windows)
 for `*.json` files, one per Claude session, named `{pid}.json`. Re-read on change
@@ -135,18 +145,38 @@ Each file contains (other keys exist and are ignored):
   == EPERM`; Windows `OpenProcess`/`Process.GetProcessById`. Stale files are ignored.
 - `status` raw values: `busy`, `shell`, `waiting`, `idle`. Unknown values → drop the session.
 
-```
-Session { pid: int, cwd: string, status: AgentStatus }
-activity: map<pid, updatedAt>   // for recently-active ordering
-```
+### Codex
+
+Watch `~/.codex/sessions/` for `*.jsonl` rollout files. Codex keeps historical
+rollouts, so a rollout is kept only if its `session_meta.payload.cwd` exactly matches a
+currently running `codex` process working directory (normalized for trailing slashes).
+
+Each rollout is parsed line-by-line. Malformed lines are ignored. The source uses:
+
+- `session_meta.payload.id` and `session_meta.payload.cwd` for identity and project cwd.
+- `event_msg.payload.type == "task_started"` to mark an active turn.
+- `event_msg.payload.type == "task_complete"` to mark the turn idle.
+- pending user-blocking `response_item` function calls (`request_user_input`, approval
+  calls, or escalated `exec_command`) to mark `waiting`.
+
+Codex status mapping:
+
+- unresolved user-blocking call → `waiting`
+- latest `task_started` without later `task_complete` → `busy`
+- otherwise → `idle`
+
+Codex rollouts do not expose a Claude-style PID per thread, so implementations assign a
+stable synthetic positive integer from the thread id for aggregation/activity maps.
 
 ---
 
 ## 5. Joining sessions to windows
 
-- **Match:** a session belongs to a window iff `basename(session.cwd) == window.folder`
-  (basename tolerates a trailing slash). IDE-agnostic. The same folder open in two editors
-  matches both windows — both show the status; that's intended (each is focusable).
+- **Match:** a session belongs to a window when `basename(session.cwd) == window.folder`
+  or `window.folder` is an exact path component of `session.cwd` (so agents launched from
+  a project subdirectory still attach to the project root row). IDE-agnostic. The same
+  folder open in two editors matches both windows — both show the status; that's intended
+  (each is focusable).
 - **Collapse** a window's matched sessions into one `WindowState` by priority:
   1. `needsAttention` — any matched session is `waiting`
   2. `working` — any is `busy` or `shell`

@@ -1,7 +1,7 @@
 {
   "uuid": "ide-toggler@cestoliv.com",
   "name": "ide-toggler",
-  "description": "Always-on-top panel listing open editor windows (Zed/VSCode/WebStorm) with live Claude Code agent status per project. Click a row to raise its window. Also exposes a DBus window API for debugging.",
+  "description": "Always-on-top panel listing open editor windows (Zed/VSCode/WebStorm) with live Claude Code or Codex agent status per project. Click a row to raise its window. Also exposes a DBus window API for debugging.",
   "url": "https://github.com/cestoliv/ide-toggler",
   "shell-version": ["50", "49", "48", "47", "46", "45"]
 }

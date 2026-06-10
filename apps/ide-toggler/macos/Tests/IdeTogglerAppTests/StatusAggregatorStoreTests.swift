@@ -177,6 +177,22 @@ final class StatusAggregatorStoreTests: XCTestCase {
         XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
     }
 
+    func test_workingToNoAgent_populatesBlinking() {
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess,
+            chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
+        store.refresh()  // working
+        sess.emit([])    // -> noAgent, as when Codex exits after completion
+        XCTAssertEqual(store.rows.first?.state, .noAgent)
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"])
+
+        store.refresh()
+        XCTAssertEqual(store.blinkingWindowIDs, ["w1"],
+                       "blink should persist while the row remains in the quiet Idle group")
+    }
+
     func test_secondTransition_replacesBlinking() {
         let win = MockWindowSource([
             EditorWindow(id: "w1", folder: "alpha"), EditorWindow(id: "w2", folder: "beta")])
