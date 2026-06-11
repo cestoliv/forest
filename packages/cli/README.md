@@ -34,30 +34,42 @@ infer from this project. Write the result to the config file (find its path with
 ## Quick start
 
 ```bash
-wt                                   # Browse worktrees (interactive TUI)
-wt create my-feat                    # New worktree, opens your IDE
-wt agent my-feat "Plan the feature"  # New worktree + AI agent in Zed (macOS)
-wt config                            # Edit config in $EDITOR
-wt skill                             # Print the skill file (for AI agents)
+wt                                        # Browse worktrees (interactive TUI)
+wt create my-feat                         # New worktree, opens your IDE
+wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macOS)
+wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of plan
+wt config                                 # Edit config in $EDITOR
+wt skill                                  # Print the skill file (for AI agents)
 ```
 
-## `wt agent <branch> <plan_prompt>` — the standout
+## `wt agent <branch> <plan_prompt> [--mode <mode>]` — the standout
 
 ```bash
 wt agent feat/login "Read the codebase, then propose a plan for login."
+wt agent fix-bug "Fix the auth bug" --mode auto
+wt agent refactor "Refactor API layer" --mode default
 ```
 
 Creates a worktree exactly like `wt create`, then auto-starts your agent
 (default `claude --permission-mode plan`) in Zed's integrated terminal —
 pre-filled with your prompt and left interactive for you to take over.
 
+**Available modes** (`--mode`, defaults to `plan`):
+
+- `default` — Standard interactive mode with approval for each action
+- `acceptEdits` — Allow file changes but keep command execution controlled
+- `plan` — Architecture-first mode with no surprise mutations (default)
+- `auto` — Claude's safety model makes decisions instead of prompting
+- `dontAsk` — Minimal interruptions in trusted environments
+- `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
+
 Under the hood it writes a temporary `.zed/tasks.json`, installs a global Zed
 keymap chord, opens Zed and fires the chord via `osascript`, then removes the
 temp task so the repo stays clean.
 
 **Requires** macOS, Zed, and Accessibility permission for the app running `wt`.
-Not granted yet? `wt agent` opens *System Settings → Privacy & Security →
-Accessibility*, waits while you grant it (you may need to quit and reopen the
+Not granted yet? `wt agent` opens _System Settings → Privacy & Security →
+Accessibility_, waits while you grant it (you may need to quit and reopen the
 app), then retries automatically. On other platforms — or when `ide` isn't
 `zed` — the worktree is still created and opened, just without the agent.
 
@@ -104,16 +116,16 @@ erroring (in a non-interactive shell it exits non-zero).
 Edit with `wt config` (`wt config --path` prints the file location —
 `~/Library/Preferences/wt-nodejs/config.json` on macOS).
 
-| Key                   | Default                           | Description                                       |
-| --------------------- | --------------------------------- | ------------------------------------------------- |
-| `ide`                 | `"zed"`                           | Editor to open worktrees with                     |
-| `ide_open_args`       | `["-n"]`                          | Extra args passed to the IDE command              |
-| `base_branch`         | `"origin/main"`                   | Branch new worktrees are created from             |
-| `worktree_path`       | `"../"`                           | Where worktrees are placed (relative to repo)     |
-| `setup_commands`      | `[]`                              | Commands to run in new worktrees                  |
-| `agent_command`       | `"claude --permission-mode plan"` | What `wt agent` runs in Zed (prompt appended)     |
-| `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses  |
-| `repo_overrides`      | `{}`                              | Per-repo overrides for any key above              |
+| Key                   | Default                           | Description                                                                         |
+| --------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
+| `ide`                 | `"zed"`                           | Editor to open worktrees with                                                       |
+| `ide_open_args`       | `["-n"]`                          | Extra args passed to the IDE command                                                |
+| `base_branch`         | `"origin/main"`                   | Branch new worktrees are created from                                               |
+| `worktree_path`       | `"../"`                           | Where worktrees are placed (relative to repo)                                       |
+| `setup_commands`      | `[]`                              | Commands to run in new worktrees                                                    |
+| `agent_command`       | `"claude --permission-mode plan"` | Base command; `--permission-mode` replaced by `--mode` option, then prompt appended |
+| `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses                                    |
+| `repo_overrides`      | `{}`                              | Per-repo overrides for any key above                                                |
 
 Override any key per repo:
 

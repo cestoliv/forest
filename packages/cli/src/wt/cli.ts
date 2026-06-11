@@ -22,10 +22,17 @@ program
 program
   .command('agent <branch> <plan_prompt>')
   .description('Create a worktree and auto-start an AI agent in Zed (macOS)')
-  .action(async (branch: string, planPrompt: string) => {
-    const { createAgentWorktree } = await import('./commands/agent.js');
-    await createAgentWorktree(branch, planPrompt);
-  });
+  .option(
+    '--mode <mode>',
+    'Claude Code permission mode (default, plan, auto, etc.)',
+    'plan',
+  )
+  .action(
+    async (branch: string, planPrompt: string, options: { mode: string }) => {
+      const { createAgentWorktree } = await import('./commands/agent.js');
+      await createAgentWorktree(branch, planPrompt, { mode: options.mode });
+    },
+  );
 
 program
   .command('config')

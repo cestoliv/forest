@@ -34,7 +34,7 @@ If the worktree path already exists, `wt create` doesn't error — it prompts yo
 to **open it in the IDE** or **quit**. (In a non-interactive shell it errors
 with a non-zero exit instead of prompting.)
 
-### `wt agent <branch> <plan_prompt>`
+### `wt agent <branch> <plan_prompt> [--mode <mode>]`
 
 Create a worktree (same as `wt create`) **and** auto-start an AI agent in Zed's
 integrated terminal, pre-filled with `<plan_prompt>` and left interactive for
@@ -42,16 +42,27 @@ you to take over.
 
 ```bash
 wt agent feature/login 'Read the codebase, then propose a plan for login.'
+wt agent feature/fix 'Fix the bug in payment processing' --mode auto
+wt agent refactor/api 'Refactor the API layer' --mode default
 ```
 
+The `--mode` flag sets Claude Code's permission mode (defaults to `plan`):
+
+- `default` — Standard interactive mode with approval for each action
+- `acceptEdits` — Allow file changes but keep command execution controlled
+- `plan` — Architecture-first mode with no surprise mutations (default)
+- `auto` — Claude's safety model makes decisions instead of prompting
+- `dontAsk` — Minimal interruptions in trusted environments
+- `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
+
 It writes a temporary `.zed/tasks.json` running
-`<agent_command> '<plan_prompt>'`, ensures a global Zed keymap chord
+`<agent_command> --permission-mode <mode> '<plan_prompt>'`, ensures a global Zed keymap chord
 (`agent_trigger_chord`) spawns that task, opens Zed, presses the chord via
 `osascript`, then removes the temporary task so the repo is left clean.
 
 **macOS + Zed only.** Requires Accessibility permission for the app that runs
 `wt` (Zed itself, when run from its integrated terminal). If it isn't granted,
-`wt agent` opens the *Privacy & Security → Accessibility* settings pane and waits
+`wt agent` opens the _Privacy & Security → Accessibility_ settings pane and waits
 for you to grant it and confirm, then retries automatically. On other platforms
 (or when `ide` is not `zed`) the worktree is still created and opened, but the
 agent is not auto-started.
@@ -79,17 +90,17 @@ Config is stored as JSON. Get the path with `wt config --path`.
 
 ### Schema
 
-| Key              | Type       | Default         | Description                                                               |
-| ---------------- | ---------- | --------------- | ------------------------------------------------------------------------- |
-| `worktree_path`  | `string`   | `"../"`         | Where to place new worktrees, relative to the repo root                   |
-| `base_branch`    | `string`   | `"origin/main"` | Branch to base new worktrees on                                           |
-| `setup_commands` | `string[]` | `[]`            | Commands to run in a new worktree after creation (e.g. `["npm install"]`) |
-| `ide`            | `string`   | `"zed"`         | IDE command to open worktrees with                                        |
-| `ide_open_args`  | `string[]` | `["-n"]`        | Arguments passed to the IDE command                                       |
-| `agent_command`  | `string`   | `"claude --permission-mode plan"` | Command `wt agent` runs in Zed; `<plan_prompt>` is appended single-quoted |
-| `agent_trigger_chord` | `string` | `"ctrl-shift-cmd-c"` | Zed keymap chord `wt agent` installs/presses to spawn the agent task    |
-| `repos`          | `string[]` | `[]`            | Registered repo paths (auto-populated on first use)                       |
-| `repo_overrides` | `object`   | `{}`            | Per-repo config overrides (see below)                                     |
+| Key                   | Type       | Default                           | Description                                                                                                                                                               |
+| --------------------- | ---------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `worktree_path`       | `string`   | `"../"`                           | Where to place new worktrees, relative to the repo root                                                                                                                   |
+| `base_branch`         | `string`   | `"origin/main"`                   | Branch to base new worktrees on                                                                                                                                           |
+| `setup_commands`      | `string[]` | `[]`                              | Commands to run in a new worktree after creation (e.g. `["npm install"]`)                                                                                                 |
+| `ide`                 | `string`   | `"zed"`                           | IDE command to open worktrees with                                                                                                                                        |
+| `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command                                                                                                                                       |
+| `agent_command`       | `string`   | `"claude --permission-mode plan"` | Base command `wt agent` runs in Zed; any `--permission-mode` flag is replaced by the `--mode` option (defaults to `plan`), then `<plan_prompt>` is appended single-quoted |
+| `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
+| `repos`               | `string[]` | `[]`                              | Registered repo paths (auto-populated on first use)                                                                                                                       |
+| `repo_overrides`      | `object`   | `{}`                              | Per-repo config overrides (see below)                                                                                                                                     |
 
 ### Per-repo overrides
 

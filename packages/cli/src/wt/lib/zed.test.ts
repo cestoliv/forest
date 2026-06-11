@@ -72,6 +72,38 @@ describe('buildAgentTask', () => {
       shell: 'system',
     });
   });
+
+  it('injects --permission-mode when mode is provided', () => {
+    const task = buildAgentTask('claude', 'test prompt', 'L', 'auto');
+    expect(task.command).toBe("claude --permission-mode auto 'test prompt'");
+  });
+
+  it('removes existing --permission-mode and replaces with new mode', () => {
+    const task = buildAgentTask(
+      'claude --permission-mode plan',
+      'test',
+      'L',
+      'default',
+    );
+    expect(task.command).toBe("claude --permission-mode default 'test'");
+  });
+
+  it('handles multiple spaces and preserves other flags', () => {
+    const task = buildAgentTask(
+      'claude --some-flag --permission-mode plan --other-flag',
+      'test',
+      'L',
+      'auto',
+    );
+    expect(task.command).toBe(
+      "claude --some-flag --other-flag --permission-mode auto 'test'",
+    );
+  });
+
+  it('works without mode parameter (backward compatibility)', () => {
+    const task = buildAgentTask('claude --permission-mode plan', 'test', 'L');
+    expect(task.command).toBe("claude --permission-mode plan 'test'");
+  });
 });
 
 describe('upsertTask / removeTask', () => {

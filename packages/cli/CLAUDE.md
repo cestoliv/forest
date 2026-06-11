@@ -21,6 +21,15 @@ npx vitest run src/lib/git.test.ts
 
 After building, the CLI is available as `wt` (via the `bin` field in package.json).
 
+### CLI Usage
+
+- `wt` — Interactive TUI for browsing and opening worktrees
+- `wt create [branch]` — Create a new worktree
+- `wt agent <branch> <plan_prompt> [--mode <mode>]` — Create a worktree and auto-start Claude Code agent in Zed (macOS)
+  - `--mode` — Claude Code permission mode: `default`, `acceptEdits`, `plan` (default), `auto`, `dontAsk`, `bypassPermissions`
+- `wt config [--path]` — Open config file or print its path
+- `wt skill` — Print the bundled SKILL.md
+
 ## Distribution
 
 The package is published to npm as **`@cestoliv/wt`** (scoped, public —
@@ -99,15 +108,15 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 
 ### Library layer (`src/lib/`)
 
-| File          | Role                                                                                                                                                                                                                                   |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `git.ts`      | All `git worktree` shell calls via `execFileSync`. Exports `parseWorktreeList` separately (pure, no fs) to allow unit-testing without real repos.                                                                                      |
-| `config.ts`   | Typed config schema (`WtConfig`), read/write via the `conf` package (persisted to `~/Library/Preferences/wt-nodejs/config.json` on macOS). `getEffectiveConfig(repoPath)` merges global defaults → global config → per-repo overrides. |
-| `registry.ts` | Maintains the `repos[]` list in config — repos auto-register themselves on first `wt` invocation inside them.                                                                                                                          |
-| `tui.ts`      | Terminal UI: pure functions (`filterItems`, `groupByRepo`, `renderList`) + interactive `runInteractiveList` using raw stdin.                                                                                                           |
-| `ide.ts`      | Launches the configured IDE via `spawn` with `detached: true`. `unref()` is called only after the `spawn` event fires (not immediately) to ensure error events can still surface.                                                      |
-| `setup.ts`    | Runs `setup_commands` in the new worktree via `spawn` with `shell: true`.                                                                                                                                                              |
-| `zed.ts`      | Zed automation for `wt agent`: pure builders (`buildAgentTask`, `parseChord`, `buildOsascript`, keymap/task upserts) + side-effecting wrappers (`writeAgentTask`, `ensureKeymap`, `cleanupAgentTask`, darwin-gated `triggerChord`). Exports `AGENT_TASK_LABEL`.                |
+| File          | Role                                                                                                                                                                                                                                                            |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `git.ts`      | All `git worktree` shell calls via `execFileSync`. Exports `parseWorktreeList` separately (pure, no fs) to allow unit-testing without real repos.                                                                                                               |
+| `config.ts`   | Typed config schema (`WtConfig`), read/write via the `conf` package (persisted to `~/Library/Preferences/wt-nodejs/config.json` on macOS). `getEffectiveConfig(repoPath)` merges global defaults → global config → per-repo overrides.                          |
+| `registry.ts` | Maintains the `repos[]` list in config — repos auto-register themselves on first `wt` invocation inside them.                                                                                                                                                   |
+| `tui.ts`      | Terminal UI: pure functions (`filterItems`, `groupByRepo`, `renderList`) + interactive `runInteractiveList` using raw stdin.                                                                                                                                    |
+| `ide.ts`      | Launches the configured IDE via `spawn` with `detached: true`. `unref()` is called only after the `spawn` event fires (not immediately) to ensure error events can still surface.                                                                               |
+| `setup.ts`    | Runs `setup_commands` in the new worktree via `spawn` with `shell: true`.                                                                                                                                                                                       |
+| `zed.ts`      | Zed automation for `wt agent`: pure builders (`buildAgentTask`, `parseChord`, `buildOsascript`, keymap/task upserts) + side-effecting wrappers (`writeAgentTask`, `ensureKeymap`, `cleanupAgentTask`, darwin-gated `triggerChord`). Exports `AGENT_TASK_LABEL`. |
 
 ### Config & config layers
 

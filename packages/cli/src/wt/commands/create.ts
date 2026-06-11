@@ -33,6 +33,7 @@ export interface CreateOptions {
     worktreePath: string,
     opts: { allowAgent: boolean },
   ) => Promise<ExistingWorktreeAction>;
+  mode?: string;
 }
 
 export interface PreparedWorktree {

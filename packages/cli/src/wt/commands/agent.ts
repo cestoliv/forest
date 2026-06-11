@@ -19,6 +19,18 @@ import {
   promptExistingWorktree,
 } from './create.js';
 
+/** Valid Claude Code permission modes */
+const VALID_MODES = [
+  'default',
+  'acceptEdits',
+  'plan',
+  'auto',
+  'dontAsk',
+  'bypassPermissions',
+] as const;
+
+type AgentMode = (typeof VALID_MODES)[number];
+
 /**
  * Delay after the chord fires before removing the ephemeral .zed task. Kept
  * generous so a slow machine or cold Zed start has read and spawned the task
@@ -39,6 +51,15 @@ export async function createAgentWorktree(
   planPrompt: string,
   options: CreateOptions = {},
 ): Promise<void> {
+  // Validate and normalize the mode
+  const mode = options.mode ?? 'plan';
+  if (!VALID_MODES.includes(mode as AgentMode)) {
+    console.error(
+      pc.red(`Invalid mode "${mode}". Valid modes: ${VALID_MODES.join(', ')}`),
+    );
+    process.exit(1);
+  }
+
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
 
@@ -55,7 +76,7 @@ export async function createAgentWorktree(
     // 'agent' falls through to start the agent in the existing worktree.
   }
 
-  await startAgentInWorktree(config, worktreePath, planPrompt);
+  await startAgentInWorktree(config, worktreePath, planPrompt, mode);
 }
 
 /**
@@ -68,6 +89,7 @@ async function startAgentInWorktree(
   config: RepoConfig,
   worktreePath: string,
   planPrompt: string,
+  mode: string,
 ): Promise<void> {
   // The automation drives Zed specifically; fall back to the plain create
   // behaviour (open the worktree, no agent) otherwise.
@@ -94,6 +116,7 @@ async function startAgentInWorktree(
     config.agent_command,
     planPrompt,
     AGENT_TASK_LABEL,
+    mode,
   );
   const created = writeAgentTask(worktreePath, task);
   const keymapOk = ensureKeymap(config.agent_trigger_chord, AGENT_TASK_LABEL);

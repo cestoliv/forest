@@ -53,16 +53,33 @@ export interface CreatedArtifacts {
  * because with `shell: "system"` Zed runs `zsh -i -c "<command + args>"`
  * without shell-quoting, so a multi-word prompt placed in `args` would be
  * word-split (the agent would receive only the first word).
+ *
+ * When a mode is provided, injects `--permission-mode <mode>` into the command,
+ * removing any existing `--permission-mode` flag from agentCommand to avoid
+ * duplicates.
  */
 export function buildAgentTask(
   agentCommand: string,
   prompt: string,
   label: string,
+  mode?: string,
 ): ZedTask {
+  let finalCommand = agentCommand;
+
+  // Only modify the command if a mode is explicitly provided
+  if (mode) {
+    // Remove any existing --permission-mode flag to avoid duplicates
+    const baseCommand = agentCommand
+      .replace(/--permission-mode\s+\S+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    finalCommand = `${baseCommand} --permission-mode ${mode}`.trim();
+  }
+
   const escaped = prompt.replace(/'/g, "'\\''");
   return {
     label,
-    command: `${agentCommand} '${escaped}'`,
+    command: `${finalCommand} '${escaped}'`,
     cwd: '$ZED_WORKTREE_ROOT',
     use_new_terminal: true,
     allow_concurrent_runs: false,
