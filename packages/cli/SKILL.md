@@ -67,6 +67,13 @@ for you to grant it and confirm, then retries automatically. On other platforms
 (or when `ide` is not `zed`) the worktree is still created and opened, but the
 agent is not auto-started.
 
+Over SSH it still works, provided the same user has an active graphical login on
+the Mac: the keystroke is run inside the GUI session via Launch Services
+(`open -a Terminal` briefly flashes a Terminal window). Grant Accessibility to
+Terminal (not Zed) the first time. With no one logged in graphically there is
+nothing to drive, so it falls back to the manual "press the chord in Zed"
+message.
+
 If the worktree path already exists, `wt agent` prompts you to **open it in the
 IDE**, **open it and start the agent**, or **quit** — instead of erroring. (In a
 non-interactive shell it errors with a non-zero exit instead of prompting.)

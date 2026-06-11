@@ -5,14 +5,16 @@
 // the chord via `osascript` (macOS only).
 import { spawn } from 'node:child_process';
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { applyEdits, modify, type ParseError, parse } from 'jsonc-parser';
 
@@ -474,18 +476,168 @@ export type TriggerResult =
 export const ACCESSIBILITY_SETTINGS_URL =
   'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
 
-function defaultRunner(script: string): Promise<OsascriptResult> {
+/**
+ * True when wt is running in a non-graphical session (e.g. over SSH). A process
+ * in an SSH session lives in the `Background` launchd/audit namespace, not the
+ * logged-in user's `Aqua` session, so a directly-spawned osascript can't reach
+ * the window server and `System Events` times out (`-1712`). When headless the
+ * keystroke is instead handed to Launch Services so it runs inside the GUI
+ * session — see {@link runViaGuiHelper}.
+ */
+export function isHeadlessSession(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return Boolean(env.SSH_CONNECTION || env.SSH_TTY || env.SSH_CLIENT);
+}
+
+/**
+ * Shell run by the Launch Services helper *inside* the Aqua session. It runs the
+ * AppleScript at `scriptPath` with osascript, writes `<exitcode>\n<stderr>`
+ * atomically to `resultPath` (so the SSH side can poll for it), then makes a
+ * best-effort attempt to close the Terminal window it was launched in.
+ */
+export function buildGuiHelperScript(
+  scriptPath: string,
+  resultPath: string,
+): string {
+  // Wrap a value as a shell single-quoted literal, escaping any embedded
+  // single quotes (close, escaped quote, reopen). Paths come from mkdtempSync
+  // today, but this keeps the helper correct for any path.
+  const q = (s: string): string => `'${s.replace(/'/g, "'\\''")}'`;
+  return [
+    '#!/bin/sh',
+    `out=$(osascript ${q(scriptPath)} 2>&1)`,
+    'code=$?',
+    `printf '%s\\n%s' "$code" "$out" > ${q(`${resultPath}.tmp`)} && mv ${q(`${resultPath}.tmp`)} ${q(resultPath)}`,
+    `osascript -e 'tell application "Terminal" to close front window' >/dev/null 2>&1 &`,
+    '',
+  ].join('\n');
+}
+
+/** Parse the helper's `<exitcode>\n<stderr>` result file into an OsascriptResult. */
+export function parseGuiResult(content: string): OsascriptResult {
+  const newline = content.indexOf('\n');
+  const codeStr = (newline === -1 ? content : content.slice(0, newline)).trim();
+  const stderr = newline === -1 ? '' : content.slice(newline + 1);
+  const code = Number.parseInt(codeStr, 10);
+  if (Number.isNaN(code)) {
+    return {
+      code: null,
+      stderr:
+        stderr ||
+        `unexpected result format (first line: ${JSON.stringify(codeStr)})`,
+    };
+  }
+  return { code, stderr };
+}
+
+/** Hard cap so a wedged osascript can't hang wt forever (default timeout ~60s+). */
+const OSASCRIPT_TIMEOUT_MS = 30_000;
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Spawn `open -a Terminal <helper>` and resolve once `open` has handed off. */
+function spawnOpen(helperPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('open', ['-a', 'Terminal', helperPath], {
+      stdio: 'ignore',
+    });
+    child.on('error', reject);
+    child.on('close', () => resolve());
+  });
+}
+
+/** Poll for `path` to appear, returning its contents or null on timeout. */
+async function pollFile(
+  path: string,
+  timeoutMs: number,
+): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return readFileSync(path, 'utf8');
+    await sleep(200);
+  }
+  return null;
+}
+
+/**
+ * Run an AppleScript from a non-GUI (SSH) session via Launch Services:
+ * `open -a Terminal <helper>` starts the helper inside the logged-in user's Aqua
+ * session, where the window server is reachable — avoiding the `-1712` timeout a
+ * directly-spawned osascript hits (and the `launchctl asuser` audit-session
+ * error, which needs root). The helper writes its result to a temp file we poll.
+ * Accessibility for the keystroke is attributed to Terminal (a stable identity),
+ * so the grant persists across runs.
+ */
+async function runViaGuiHelper(script: string): Promise<OsascriptResult> {
+  const dir = mkdtempSync(join(tmpdir(), 'wt-agent-'));
+  const scriptPath = join(dir, 'chord.applescript');
+  const helperPath = join(dir, 'run.command');
+  const resultPath = join(dir, 'result');
+  try {
+    writeFileSync(scriptPath, script);
+    writeFileSync(helperPath, buildGuiHelperScript(scriptPath, resultPath));
+    chmodSync(helperPath, 0o755);
+    await spawnOpen(helperPath);
+    const content = await pollFile(resultPath, OSASCRIPT_TIMEOUT_MS);
+    if (content === null) {
+      return {
+        code: null,
+        stderr:
+          "Timed out waiting for the keystroke — is a user logged into the Mac's graphical session?",
+      };
+    }
+    return parseGuiResult(content);
+  } catch (err) {
+    return {
+      code: null,
+      stderr: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Run osascript directly (graphical session) with a timeout backstop. */
+function runOsascriptDirect(script: string): Promise<OsascriptResult> {
   return new Promise((resolve) => {
     const child = spawn('osascript', ['-e', script], {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
     let stderr = '';
+    let settled = false;
+    const finish = (result: OsascriptResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({
+        code: null,
+        stderr:
+          "osascript timed out — is a user logged into the Mac's graphical session?",
+      });
+    }, OSASCRIPT_TIMEOUT_MS);
     child.stderr?.on('data', (d) => {
       stderr += d.toString();
     });
-    child.on('error', (err) => resolve({ code: null, stderr: err.message }));
-    child.on('close', (code) => resolve({ code, stderr }));
+    child.on('error', (err) => finish({ code: null, stderr: err.message }));
+    child.on('close', (code) => finish({ code, stderr }));
   });
+}
+
+/**
+ * Default osascript runner: over SSH it goes through the Launch Services helper
+ * so the keystroke runs in the GUI session; otherwise it spawns osascript
+ * directly.
+ */
+function defaultRunner(script: string): Promise<OsascriptResult> {
+  return isHeadlessSession()
+    ? runViaGuiHelper(script)
+    : runOsascriptDirect(script);
 }
 
 /**

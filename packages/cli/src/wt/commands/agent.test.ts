@@ -3,12 +3,14 @@ import { execSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { confirm } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import { openIde } from '../lib/ide.js';
 import {
   cleanupAgentTask,
   ensureKeymap,
+  isHeadlessSession,
   openAccessibilitySettings,
   triggerChord,
   writeAgentTask,
@@ -30,6 +32,7 @@ vi.mock('../lib/zed.js', () => ({
   triggerChord: vi.fn(async () => ({ ok: true })),
   cleanupAgentTask: vi.fn(),
   openAccessibilitySettings: vi.fn(),
+  isHeadlessSession: vi.fn(() => false),
 }));
 
 // Branch is always supplied in these tests, so clack prompts are never hit;
@@ -178,6 +181,28 @@ describe('createAgentWorktree', () => {
 
     expect(openAccessibilitySettings).toHaveBeenCalled();
     expect(cleanupAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('names Terminal as the grantee in the Accessibility prompt over SSH', async () => {
+    const store = configure();
+    vi.mocked(triggerChord).mockResolvedValue({
+      ok: false,
+      reason: 'accessibility',
+    });
+    vi.mocked(isHeadlessSession).mockReturnValue(true);
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    try {
+      await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    } finally {
+      process.stdin.isTTY = originalIsTTY;
+    }
+
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('Terminal'),
+      }),
+    );
   });
 
   it('returns without side effects when the user cancels worktree creation', async () => {

@@ -7,6 +7,7 @@ import {
   buildAgentTask,
   cleanupAgentTask,
   ensureKeymap,
+  isHeadlessSession,
   openAccessibilitySettings,
   type TriggerResult,
   triggerChord,
@@ -159,9 +160,14 @@ async function startAgentInWorktree(
       ),
     );
     openAccessibilitySettings();
+    // Over SSH the keystroke is sent by Terminal (the Launch Services helper),
+    // so that is the app that needs Accessibility — not Zed.
+    const grantee = isHeadlessSession()
+      ? 'Terminal'
+      : 'the app running wt (e.g. Zed)';
     const proceed = await clack.confirm({
       message:
-        'Grant Accessibility to the app running wt (e.g. Zed) in the panel ' +
+        `Grant Accessibility to ${grantee} in the panel ` +
         'that opened, then confirm to retry. (If that app was already running, ' +
         'you may need to quit and reopen it for the grant to take effect.)',
     });
@@ -210,7 +216,8 @@ function reportTriggerFailure(
   console.warn(
     pc.yellow(
       `⚠ Could not auto-start the agent${result.message ? `: ${result.message}` : ''}. ` +
-        `In Zed, press ${chord} to start it manually.`,
+        `In Zed, press ${chord} to start it manually. (Over SSH, this needs the ` +
+        `same user logged into the Mac's graphical session.)`,
     ),
   );
 }

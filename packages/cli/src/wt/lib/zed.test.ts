@@ -1,4 +1,6 @@
 // src/lib/zed.test.ts
+import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import {
   existsSync,
   mkdirSync,
@@ -15,13 +17,16 @@ import {
   ACCESSIBILITY_SETTINGS_URL,
   AGENT_TASK_LABEL,
   buildAgentTask,
+  buildGuiHelperScript,
   buildKeymapBinding,
   buildOsascript,
   cleanupAgentTask,
   ensureKeymap,
   isAccessibilityError,
+  isHeadlessSession,
   openAccessibilitySettings,
   parseChord,
+  parseGuiResult,
   removeTask,
   triggerChord,
   upsertKeymapBinding,
@@ -29,6 +34,11 @@ import {
   writeAgentTask,
   type ZedTask,
 } from './zed.js';
+
+// Only the osascript/open spawns matter here; every other test in this file
+// injects its own runner/open, so a bare spawn mock is safe module-wide.
+// (vitest hoists vi.mock above the imports regardless of placement here.)
+vi.mock('node:child_process', () => ({ spawn: vi.fn() }));
 
 let tmpDir: string;
 
@@ -595,6 +605,180 @@ describe('triggerChord', () => {
     await triggerChord('ctrl-c', { runner, loadDelay: 0, activateDelay: 0.5 });
     expect(runner).toHaveBeenCalledWith(expect.stringContaining('delay 0'));
     expect(runner).toHaveBeenCalledWith(expect.stringContaining('delay 0.5'));
+  });
+});
+
+// Exercises defaultRunner's headless-vs-direct routing and runOsascriptDirect's
+// timeout backstop via the public triggerChord (no injected runner), with only
+// child_process.spawn mocked.
+describe('defaultRunner (via triggerChord, no injected runner)', () => {
+  const originalPlatform = process.platform;
+  const setPlatform = (value: string) => {
+    Object.defineProperty(process, 'platform', { value, configurable: true });
+  };
+
+  // A minimal ChildProcess stand-in: an EventEmitter with a stderr stream and a
+  // spy kill(). spawn's real return type is satisfied via a single cast.
+  const makeChild = () => {
+    const child = new EventEmitter() as EventEmitter & {
+      stderr: EventEmitter;
+      kill: ReturnType<typeof vi.fn>;
+    };
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    return child;
+  };
+  const returnChild = (child: ReturnType<typeof makeChild>) => {
+    vi.mocked(spawn).mockImplementation(
+      (() => child) as unknown as typeof spawn,
+    );
+  };
+
+  beforeEach(() => {
+    setPlatform('darwin');
+    vi.stubEnv('SSH_CONNECTION', '');
+    vi.stubEnv('SSH_TTY', '');
+    vi.stubEnv('SSH_CLIENT', '');
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', {
+      value: originalPlatform,
+      configurable: true,
+    });
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+    vi.mocked(spawn).mockReset();
+  });
+
+  it('spawns osascript directly when not headless', async () => {
+    const child = makeChild();
+    returnChild(child);
+    const promise = triggerChord('ctrl-c', {});
+    await Promise.resolve();
+    child.emit('close', 0);
+    expect(await promise).toEqual({ ok: true });
+    expect(spawn).toHaveBeenCalledWith(
+      'osascript',
+      expect.arrayContaining(['-e']),
+      expect.anything(),
+    );
+  });
+
+  it('hands off to Launch Services (open -a Terminal) when headless', async () => {
+    vi.stubEnv('SSH_CONNECTION', '10.0.0.1 1 10.0.0.2 22');
+    vi.useFakeTimers();
+    const child = makeChild();
+    // `open` exits immediately; the GUI helper never writes a result file, so
+    // pollFile times out — which is all we need to assert the routing.
+    vi.mocked(spawn).mockImplementation(((..._args: unknown[]) => {
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    }) as unknown as typeof spawn);
+
+    const promise = triggerChord('ctrl-c', {});
+    await vi.advanceTimersByTimeAsync(31_000);
+    const result = await promise;
+
+    expect(spawn).toHaveBeenCalledWith(
+      'open',
+      ['-a', 'Terminal', expect.any(String)],
+      expect.anything(),
+    );
+    expect(result).toMatchObject({ ok: false, reason: 'error' });
+    expect((result as { message?: string }).message).toContain('Timed out');
+  });
+
+  it('kills osascript and reports a timeout when it never exits', async () => {
+    vi.useFakeTimers();
+    const child = makeChild();
+    returnChild(child);
+
+    const promise = triggerChord('ctrl-c', {});
+    await vi.advanceTimersByTimeAsync(31_000);
+    const result = await promise;
+
+    expect(child.kill).toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: false, reason: 'error' });
+    expect((result as { message?: string }).message).toContain('timed out');
+  });
+});
+
+describe('isHeadlessSession', () => {
+  it('is true when an SSH variable is present', () => {
+    expect(
+      isHeadlessSession({ SSH_CONNECTION: '10.0.0.1 1 10.0.0.2 22' }),
+    ).toBe(true);
+    expect(isHeadlessSession({ SSH_TTY: '/dev/ttys001' })).toBe(true);
+    expect(isHeadlessSession({ SSH_CLIENT: '10.0.0.1 1 22' })).toBe(true);
+  });
+
+  it('is false with no SSH variables', () => {
+    expect(isHeadlessSession({})).toBe(false);
+  });
+});
+
+describe('buildGuiHelperScript', () => {
+  it('runs the script with osascript and writes the result atomically', () => {
+    const helper = buildGuiHelperScript(
+      '/tmp/x/chord.applescript',
+      '/tmp/x/result',
+    );
+    expect(helper.startsWith('#!/bin/sh\n')).toBe(true);
+    expect(helper).toContain(
+      "out=$(osascript '/tmp/x/chord.applescript' 2>&1)",
+    );
+    expect(helper).toContain(
+      `printf '%s\\n%s' "$code" "$out" > '/tmp/x/result.tmp' && mv '/tmp/x/result.tmp' '/tmp/x/result'`,
+    );
+  });
+
+  it('makes a best-effort attempt to close the Terminal window', () => {
+    const helper = buildGuiHelperScript('/tmp/x/s', '/tmp/x/r');
+    expect(helper).toContain(
+      'tell application "Terminal" to close front window',
+    );
+  });
+});
+
+describe('parseGuiResult', () => {
+  it('parses exit code 0 with no stderr as success', () => {
+    expect(parseGuiResult('0\n')).toEqual({ code: 0, stderr: '' });
+  });
+
+  it('splits the exit code from a multi-line stderr', () => {
+    expect(parseGuiResult('1\nboom\nmore')).toEqual({
+      code: 1,
+      stderr: 'boom\nmore',
+    });
+  });
+
+  it('returns a null code and a diagnostic when the content is not a number', () => {
+    expect(parseGuiResult('nope')).toEqual({
+      code: null,
+      stderr: 'unexpected result format (first line: "nope")',
+    });
+  });
+
+  it('returns a null code and a diagnostic for an empty string', () => {
+    expect(parseGuiResult('')).toEqual({
+      code: null,
+      stderr: 'unexpected result format (first line: "")',
+    });
+  });
+
+  it('preserves stderr when the code line is non-numeric but has a newline', () => {
+    expect(parseGuiResult('nope\nthe actual error')).toEqual({
+      code: null,
+      stderr: 'the actual error',
+    });
+  });
+
+  it('parses exit code 0 with stderr present', () => {
+    expect(parseGuiResult('0\nsome warning')).toEqual({
+      code: 0,
+      stderr: 'some warning',
+    });
   });
 });
 
