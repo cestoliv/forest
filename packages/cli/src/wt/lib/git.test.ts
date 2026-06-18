@@ -52,6 +52,12 @@ describe('getRepoRoot', () => {
   it('throws when not in a git repo', () => {
     expect(() => getRepoRoot(tmpdir())).toThrow('Not in a git repository');
   });
+
+  it('returns the main repo root when run from inside a linked worktree', () => {
+    const wtPath = path.join(tmpDir, 'repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    expect(getRepoRoot(wtPath)).toBe(repoDir);
+  });
 });
 
 describe('listWorktrees', () => {

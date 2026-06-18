@@ -16,11 +16,18 @@ export function getRepoRoot(cwd = process.cwd()): string {
     // Resolve symlinks on cwd so git's output matches the input path on macOS
     // (where /var/folders is a symlink to /private/var/folders)
     const realCwd = realpathSync(cwd);
-    return execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    // The main worktree is always the first entry of `git worktree list`.
+    // `git rev-parse --show-toplevel` returns the *current* worktree instead,
+    // so running inside a linked worktree would register that worktree as a
+    // separate repo. Resolving to the main worktree keeps the repo identity
+    // stable across all of its worktrees.
+    const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
       cwd: realCwd,
       encoding: 'utf8',
       stdio: 'pipe',
-    }).trim();
+    });
+    const firstLine = output.trim().split('\n')[0];
+    return realpathSync(firstLine.slice('worktree '.length));
   } catch {
     throw new Error('Not in a git repository');
   }

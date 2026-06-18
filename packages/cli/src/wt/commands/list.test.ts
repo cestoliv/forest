@@ -41,6 +41,20 @@ describe('prepareListItems', () => {
     expect(store.get('repos')).toContain(repoDir);
   });
 
+  it('does not register a linked worktree as a separate repo', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+
+    await prepareListItems({ cwd: repoDir, store });
+    await prepareListItems({ cwd: wtPath, store });
+
+    const repos = store.get('repos') as string[];
+    expect(repos).toContain(repoDir);
+    expect(repos).not.toContain(wtPath);
+    expect(repos.filter((r) => r === repoDir)).toHaveLength(1);
+  });
+
   it('returns global mode when cwd is outside any git repo', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     const result = await prepareListItems({ cwd: tmpDir, store });
