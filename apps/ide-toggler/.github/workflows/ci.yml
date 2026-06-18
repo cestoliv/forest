@@ -14,7 +14,7 @@ jobs:
         working-directory: macos
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Print Swift version
         run: swift --version
@@ -32,14 +32,34 @@ jobs:
         working-directory: linux
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: "20"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
 
       - name: Print Node version
         run: node --version
 
       - name: Test (pure extension logic)
         run: node --test
+
+      # shexli mirrors the extensions.gnome.org review checks. It always exits 0,
+      # so we gate on error-severity findings ourselves; warnings stay advisory.
+      - name: Static analysis (shexli)
+        run: |
+          python3 -m pip install -q shexli
+          # shexli needs an absolute path (it crashes on a relative one).
+          EXT="$GITHUB_WORKSPACE/linux/gnome-extension/ide-toggler@cestoliv.com"
+          shexli --format text "$EXT"
+          shexli --format json "$EXT" > shexli-report.json
+          errors=$(jq '.summary.severity_counts.error // 0' shexli-report.json)
+          echo "shexli error-level findings: $errors"
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::shexli reported $errors error-level finding(s) — see output above"
+            exit 1
+          fi

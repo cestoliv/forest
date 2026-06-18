@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 
 import {
     basenameOfCwd, parseSessionObject, KNOWN_STATUSES,
-} from '../gnome-extension/ide-toggler@cestoliv.dev/lib/sessions.js';
+} from '../gnome-extension/ide-toggler@cestoliv.com/lib/sessions.js';
 
 test('basenameOfCwd returns the last path component', () => {
     assert.equal(basenameOfCwd('/abs/path/to/project'), 'project');

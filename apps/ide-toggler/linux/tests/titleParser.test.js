@@ -3,7 +3,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
-import {folderFromTitle} from '../gnome-extension/ide-toggler@cestoliv.dev/lib/titleParser.js';
+import {folderFromTitle} from '../gnome-extension/ide-toggler@cestoliv.com/lib/titleParser.js';
 import {editor} from './helpers.js';
 
 const folder = (title, kind) => folderFromTitle(title, editor(kind));

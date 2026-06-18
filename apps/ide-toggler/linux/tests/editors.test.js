@@ -3,7 +3,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
-import {EDITORS, editorForWmClass} from '../gnome-extension/ide-toggler@cestoliv.dev/lib/editors.js';
+import {EDITORS, editorForWmClass} from '../gnome-extension/ide-toggler@cestoliv.com/lib/editors.js';
 
 test('catalog has the three supported editors with stable kinds', () => {
     assert.deepEqual(EDITORS.map(e => e.kind), ['zed', 'vscode', 'jetBrains']);

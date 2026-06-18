@@ -70,6 +70,37 @@ swift build
 swift test
 ```
 
+## Linux (GNOME Shell extension)
+
+On GNOME the panel ships as a Shell extension (GJS). See
+[`linux/README.md`](linux/README.md) for development details and
+[`SPEC.md`](SPEC.md) §9 for the GNOME-specific behavior.
+
+### Install from a GitHub Release (recommended)
+
+1. Download `ide-toggler@cestoliv.com.shell-extension.zip` from the
+   [latest release](../../releases/latest).
+2. Install and enable it:
+
+   ```bash
+   gnome-extensions install --force ide-toggler@cestoliv.com.shell-extension.zip
+   gnome-extensions enable ide-toggler@cestoliv.com
+   ```
+
+3. Reload GNOME Shell so it picks up the new extension:
+   - **Wayland:** log out and back in.
+   - **X11:** press `Alt`+`F2`, type `r`, then Enter.
+
+> If `gnome-extensions enable` reports the extension is not found, reload the
+> shell first (step 3), then run the enable command again.
+
+### Install from extensions.gnome.org
+
+<!-- TODO: add the EGO listing link once the first submission clears review -->
+
+Once the first submission clears review, the extension will be installable in one
+click from [extensions.gnome.org](https://extensions.gnome.org/).
+
 ## How It Works
 
 1. **Window enumeration** — the macOS Accessibility API (`AXUIElementCreateApplication`) is called for each running `dev.zed.Zed` process. Each window's title is parsed on the `" — "` (em-dash) separator to extract the project folder name, and each window is keyed by its stable `CGWindowID` for reliable click-to-raise.

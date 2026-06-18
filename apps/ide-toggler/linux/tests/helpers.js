@@ -1,5 +1,5 @@
 // Test helpers shared across the Node suite.
-import {EDITORS} from '../gnome-extension/ide-toggler@cestoliv.dev/lib/editors.js';
+import {EDITORS} from '../gnome-extension/ide-toggler@cestoliv.com/lib/editors.js';
 
 // Look up an editor descriptor by IDEKind, so tests can mirror the macOS
 // `using: .zed` style.

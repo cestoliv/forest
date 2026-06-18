@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
     collapseState, priorityRank, groupForState, ORDER_MODES,
     buildRows, compactRow, detectTransitions, nextBlinkSet,
-} from '../gnome-extension/ide-toggler@cestoliv.dev/lib/aggregator.js';
+} from '../gnome-extension/ide-toggler@cestoliv.com/lib/aggregator.js';
 import {win, session} from './helpers.js';
 
 // --- collapseState (§5 priority) --------------------------------------------
