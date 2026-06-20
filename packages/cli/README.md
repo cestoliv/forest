@@ -123,6 +123,7 @@ Edit with `wt config` (`wt config --path` prints the file location —
 | `base_branch`         | `"origin/main"`                   | Branch new worktrees are created from                                               |
 | `worktree_path`       | `"../"`                           | Where worktrees are placed (relative to repo)                                       |
 | `setup_commands`      | `[]`                              | Commands to run in new worktrees                                                    |
+| `teardown_commands`   | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`) |
 | `agent_command`       | `"claude --permission-mode plan"` | Base command; `--permission-mode` replaced by `--mode` option, then prompt appended |
 | `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses                                    |
 | `repo_overrides`      | `{}`                              | Per-repo overrides for any key above                                                |

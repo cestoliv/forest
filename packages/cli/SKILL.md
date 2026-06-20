@@ -102,6 +102,7 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | `worktree_path`       | `string`   | `"../"`                           | Where to place new worktrees, relative to the repo root                                                                                                                   |
 | `base_branch`         | `string`   | `"origin/main"`                   | Branch to base new worktrees on                                                                                                                                           |
 | `setup_commands`      | `string[]` | `[]`                              | Commands to run in a new worktree after creation (e.g. `["npm install"]`)                                                                                                 |
+| `teardown_commands`   | `string[]` | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`); on failure you are prompted whether to delete anyway                         |
 | `ide`                 | `string`   | `"zed"`                           | IDE command to open worktrees with                                                                                                                                        |
 | `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command                                                                                                                                       |
 | `agent_command`       | `string`   | `"claude --permission-mode plan"` | Base command `wt agent` runs in Zed; any `--permission-mode` flag is replaced by the `--mode` option (defaults to `plan`), then `<plan_prompt>` is appended single-quoted |
@@ -111,7 +112,7 @@ Config is stored as JSON. Get the path with `wt config --path`.
 
 ### Per-repo overrides
 
-Override any field (`worktree_path`, `base_branch`, `setup_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_trigger_chord`) for a specific repo:
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_trigger_chord`) for a specific repo:
 
 ```json
 {

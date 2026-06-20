@@ -32,14 +32,23 @@ describe('openConfig', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('logs the config path', () => {
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const originalEditor = process.env.EDITOR;
+    try {
+      // Use a fast no-op editor so the test never spawns the machine's real
+      // interactive editor (e.g. vim), which would hang on inherited stdio and
+      // race the timer-based assertions in sibling tests.
+      process.env.EDITOR = 'true';
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
 
-    openConfig(tmpDir);
+      openConfig(tmpDir);
 
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining(getConfigFilePath(tmpDir)),
-    );
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(getConfigFilePath(tmpDir)),
+      );
+    } finally {
+      process.env.EDITOR = originalEditor;
+    }
   });
 
   it('uses EDITOR env var when set', async () => {

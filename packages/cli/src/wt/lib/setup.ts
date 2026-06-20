@@ -1,15 +1,15 @@
 import { spawn } from 'node:child_process';
 
-export interface SetupResult {
+export interface CommandsResult {
   success: boolean;
   failedCommand?: string;
   exitCode?: number;
 }
 
-export async function runSetupCommands(
+export async function runCommands(
   commands: string[],
   cwd: string,
-): Promise<SetupResult> {
+): Promise<CommandsResult> {
   for (const command of commands) {
     const result = await runCommand(command, cwd);
     if (!result.success) {

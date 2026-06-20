@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runSetupCommands } from './setup.js';
+import { runCommands } from './setup.js';
 
 let tmpDir: string;
 
@@ -14,14 +14,14 @@ afterEach(() => {
   rmSync(tmpDir, { recursive: true });
 });
 
-describe('runSetupCommands', () => {
+describe('runCommands', () => {
   it('returns success for empty commands array', async () => {
-    const result = await runSetupCommands([], tmpDir);
+    const result = await runCommands([], tmpDir);
     expect(result.success).toBe(true);
   });
 
   it('runs commands sequentially in the given directory', async () => {
-    const result = await runSetupCommands(
+    const result = await runCommands(
       ['touch file1.txt', 'touch file2.txt'],
       tmpDir,
     );
@@ -32,10 +32,7 @@ describe('runSetupCommands', () => {
 
   it('stops on first failure and reports the failing command', async () => {
     const markerPath = path.join(tmpDir, 'should-not-exist.txt');
-    const result = await runSetupCommands(
-      ['exit 1', `touch ${markerPath}`],
-      tmpDir,
-    );
+    const result = await runCommands(['exit 1', `touch ${markerPath}`], tmpDir);
     expect(result.success).toBe(false);
     expect(result.failedCommand).toBe('exit 1');
     expect(result.exitCode).toBe(1);

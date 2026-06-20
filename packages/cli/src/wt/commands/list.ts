@@ -16,6 +16,7 @@ import {
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
+import { runCommands } from '../lib/setup.js';
 import { runInteractiveList } from '../lib/tui.js';
 
 export interface ListItems {
@@ -79,6 +80,22 @@ export async function runList(
         message: `Remove worktree ${pc.bold(item.branch)}? This cannot be undone.`,
       });
       if (clack.isCancel(confirmed) || !confirmed) return false;
+
+      const config = getEffectiveConfig(item.repoRoot, store);
+      if (config.teardown_commands.length > 0) {
+        console.log(pc.dim('Running teardown commands...'));
+        const result = await runCommands(config.teardown_commands, item.path);
+        if (!result.success) {
+          clack.log.warn(
+            `Teardown command failed: ${result.failedCommand} (exit code ${result.exitCode})`,
+          );
+          const proceed = await clack.confirm({
+            message: `Delete ${pc.bold(item.branch)} anyway?`,
+          });
+          if (clack.isCancel(proceed) || !proceed) return false;
+        }
+      }
+
       try {
         removeWorktree(item.repoRoot, item.path);
         console.log(pc.green(`✓ Removed ${item.branch}`));

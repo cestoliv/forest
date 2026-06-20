@@ -7,6 +7,7 @@ export interface RepoConfig {
   worktree_path: string;
   base_branch: string;
   setup_commands: string[];
+  teardown_commands: string[];
   ide: string;
   ide_open_args: string[];
   agent_command: string;
@@ -22,6 +23,7 @@ export const DEFAULT_CONFIG: WtConfig = {
   worktree_path: '../',
   base_branch: 'origin/main',
   setup_commands: [],
+  teardown_commands: [],
   ide: 'zed',
   ide_open_args: ['-n'],
   agent_command: 'claude --permission-mode plan',

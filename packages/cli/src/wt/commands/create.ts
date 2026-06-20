@@ -19,7 +19,7 @@ import {
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
-import { runSetupCommands } from '../lib/setup.js';
+import { runCommands } from '../lib/setup.js';
 import { runBranchInput, runRepoPicker } from '../lib/tui.js';
 
 export type ExistingWorktreeAction = 'open' | 'agent' | 'quit';
@@ -167,7 +167,7 @@ export async function prepareWorktree(
 
   if (config.setup_commands.length > 0) {
     console.log(pc.dim('Running setup commands...'));
-    const result = await runSetupCommands(config.setup_commands, worktreePath);
+    const result = await runCommands(config.setup_commands, worktreePath);
     if (!result.success) {
       console.error(
         pc.red(
