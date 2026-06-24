@@ -42,6 +42,26 @@ public final class PanelController: NSObject {
         anchorTopRight(panel)
         panel.orderFrontRegardless()
         self.panel = panel
+
+        // Recover the panel when the display configuration changes (monitor connect/
+        // disconnect); without this its frame can point onto a screen that no longer
+        // exists, leaving it off-screen and unreachable.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(screenParametersChanged),
+            name: NSApplication.didChangeScreenParametersNotification, object: nil)
+    }
+
+    deinit { NotificationCenter.default.removeObserver(self) }
+
+    /// When screens change, clamp the panel back onto a visible screen only if it would
+    /// otherwise be off-screen; if it's still fully visible, leave it where the user put it.
+    @objc private func screenParametersChanged(_ notification: Notification) {
+        guard let panel else { return }
+        let screens = NSScreen.screens.map { $0.visibleFrame }
+        guard let corrected = PanelGeometry.reachableFrame(for: panel.frame, screens: screens)
+        else { return }
+        panel.setFrame(corrected, display: true)
+        topRightAnchor = NSPoint(x: corrected.maxX, y: corrected.maxY)
     }
 
     /// Place the popup's top-right corner just under the menu bar, near the right edge.
@@ -69,5 +89,12 @@ extension PanelController: NSWindowDelegate {
         // top-right so the popup stays anchored under the menu bar and grows down.
         guard let window = notification.object as? NSWindow else { return }
         reposition(window)
+    }
+
+    public func windowDidMove(_ notification: Notification) {
+        // Track the panel's actual top-right (after a manual drag or a clamp) so later
+        // content resizes grow downward from where it now sits, not the startup corner.
+        guard let window = notification.object as? NSWindow else { return }
+        topRightAnchor = NSPoint(x: window.frame.maxX, y: window.frame.maxY)
     }
 }
