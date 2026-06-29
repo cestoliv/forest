@@ -34,6 +34,8 @@ describe('getGlobalConfig', () => {
     const store = createStore(tmpDir);
     const config = getGlobalConfig(store);
     expect(config.ide).toBe('zed');
+    expect(config.agent_command).toBe('claude');
+    expect(config.agent_mode).toBe('default');
     expect(config.repos).toEqual([]);
     expect(config.repo_overrides).toEqual({});
   });
@@ -76,6 +78,7 @@ describe('getEffectiveConfig', () => {
     expect(config.ide).toBe('zed');
     expect(config.setup_commands).toEqual([]);
     expect(config.auto_refresh_minutes).toBe(5);
+    expect(config.agent_mode).toBe('default');
   });
 
   it('honours a per-repo auto_refresh_minutes override', () => {
@@ -95,7 +98,11 @@ describe('getEffectiveConfig', () => {
     setGlobalConfig(
       {
         repo_overrides: {
-          '/my/repo': { ide: 'code', setup_commands: ['yarn'] },
+          '/my/repo': {
+            ide: 'code',
+            setup_commands: ['yarn'],
+            agent_mode: 'plan',
+          },
         },
       },
       store,
@@ -104,6 +111,7 @@ describe('getEffectiveConfig', () => {
     expect(config.ide).toBe('code');
     expect(config.setup_commands).toEqual(['yarn']);
     expect(config.worktree_path).toBe('../');
+    expect(config.agent_mode).toBe('plan');
   });
 
   it('repo override does not affect other repos', () => {

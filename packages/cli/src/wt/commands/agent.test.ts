@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import { openIde } from '../lib/ide.js';
 import {
+  buildAgentTask,
   cleanupAgentTask,
   ensureKeymap,
   isHeadlessSession,
@@ -216,6 +217,96 @@ describe('createAgentWorktree', () => {
 
     expect(writeAgentTask).not.toHaveBeenCalled();
     expect(openIde).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAgentWorktree (mode resolution)', () => {
+  const runAgent = async (
+    store: ReturnType<typeof configure>,
+    mode?: string,
+  ) => {
+    vi.useFakeTimers();
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      cwd: repoDir,
+      store,
+      ...(mode !== undefined ? { mode } : {}),
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+  };
+
+  it("defaults to 'default' when neither --mode nor agent_mode is set", async () => {
+    await runAgent(configure());
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+    );
+  });
+
+  it('falls back to the configured agent_mode when --mode is omitted', async () => {
+    await runAgent(configure({ agent_mode: 'plan' }));
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'plan',
+    );
+  });
+
+  it('lets an explicit --mode override the configured agent_mode', async () => {
+    await runAgent(configure({ agent_mode: 'plan' }), 'auto');
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'auto',
+    );
+  });
+
+  it("warns and falls back to 'default' on an invalid configured agent_mode", async () => {
+    await runAgent(configure({ agent_mode: 'Plan' }));
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid agent_mode "Plan"'),
+    );
+    // The worktree/agent still start — no orphan, no crash.
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+    );
+  });
+
+  it("treats an empty agent_mode as unset and falls back to 'default'", async () => {
+    await runAgent(configure({ agent_mode: '' }));
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+    );
+  });
+
+  it('exits without creating a worktree on an invalid --mode', async () => {
+    const store = configure();
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('exit');
+    });
+    try {
+      await expect(
+        createAgentWorktree('feature', 'do stuff', {
+          cwd: repoDir,
+          store,
+          mode: 'bogus',
+        }),
+      ).rejects.toThrow('exit');
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(writeAgentTask).not.toHaveBeenCalled();
+    } finally {
+      exitSpy.mockRestore();
+    }
   });
 });
 

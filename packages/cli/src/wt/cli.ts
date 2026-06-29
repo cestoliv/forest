@@ -24,11 +24,10 @@ program
   .description('Create a worktree and auto-start an AI agent in Zed (macOS)')
   .option(
     '--mode <mode>',
-    'Claude Code permission mode (default, plan, auto, etc.)',
-    'plan',
+    'Claude Code permission mode (default, plan, auto, etc.); overrides the configured agent_mode',
   )
   .action(
-    async (branch: string, planPrompt: string, options: { mode: string }) => {
+    async (branch: string, planPrompt: string, options: { mode?: string }) => {
       const { createAgentWorktree } = await import('./commands/agent.js');
       await createAgentWorktree(branch, planPrompt, { mode: options.mode });
     },

@@ -156,9 +156,8 @@ export async function runList(
         // Wizard: worktree (repo → branch) → plan prompt → permission mode. Esc
         // steps back one (and to the list from the first step). Entered values
         // are preserved so going back and forward doesn't lose work.
-        const state: WorktreeTarget & { plan?: string; mode: string } = {
+        const state: WorktreeTarget & { plan?: string; mode?: string } = {
           pickedRepo: repoRoot ?? undefined,
-          mode: 'plan',
         };
         const steps = buildWorktreeSteps(repoRoot, store, state);
 
@@ -174,9 +173,14 @@ export async function runList(
         });
 
         steps.push(async () => {
+          // Preselect the configured default for the chosen repo (the repo step
+          // has already run by now), unless the user already picked a mode.
+          const configuredMode = state.pickedRepo
+            ? getEffectiveConfig(state.pickedRepo, store).agent_mode
+            : undefined;
           const chosen = await clack.select({
             message: 'Permission mode:',
-            initialValue: state.mode,
+            initialValue: state.mode ?? configuredMode,
             options: VALID_MODES.map((m) => ({ value: String(m), label: m })),
           });
           if (clack.isCancel(chosen)) return false;

@@ -66,11 +66,12 @@ wt agent feature/fix 'Fix the bug in payment processing' --mode auto
 wt agent refactor/api 'Refactor the API layer' --mode default
 ```
 
-The `--mode` flag sets Claude Code's permission mode (defaults to `plan`):
+The `--mode` flag sets Claude Code's permission mode (defaults to `default`;
+change the default with the `agent_mode` config key):
 
-- `default` — Standard interactive mode with approval for each action
+- `default` — Standard interactive mode with approval for each action (default)
 - `acceptEdits` — Allow file changes but keep command execution controlled
-- `plan` — Architecture-first mode with no surprise mutations (default)
+- `plan` — Architecture-first mode with no surprise mutations
 - `auto` — Claude's safety model makes decisions instead of prompting
 - `dontAsk` — Minimal interruptions in trusted environments
 - `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
@@ -144,7 +145,8 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | `teardown_commands`   | `string[]` | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`); on failure you are prompted whether to delete anyway                         |
 | `ide`                 | `string`   | `"zed"`                           | IDE command to open worktrees with                                                                                                                                        |
 | `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command                                                                                                                                       |
-| `agent_command`       | `string`   | `"claude --permission-mode plan"` | Base command `wt agent` runs in Zed; any `--permission-mode` flag is replaced by the `--mode` option (defaults to `plan`), then `<plan_prompt>` is appended single-quoted |
+| `agent_command`       | `string`   | `"claude"`                        | Base command `wt agent` runs in Zed; `--permission-mode <mode>` is injected (any existing one replaced), then `<plan_prompt>` is appended single-quoted                   |
+| `agent_mode`          | `string`   | `"default"`                       | Default Claude Code permission mode for `wt agent`; the `--mode` flag overrides it. One of `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`        |
 | `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
 | `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh                                             |
 | `repos`               | `string[]` | `[]`                              | Registered repo paths (auto-populated on first use)                                                                                                                       |
@@ -152,7 +154,7 @@ Config is stored as JSON. Get the path with `wt config --path`.
 
 ### Per-repo overrides
 
-Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_trigger_chord`, `auto_refresh_minutes`) for a specific repo:
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_mode`, `agent_trigger_chord`, `auto_refresh_minutes`) for a specific repo:
 
 ```json
 {

@@ -37,7 +37,7 @@ infer from this project. Write the result to the config file (find its path with
 wt                                        # Browse worktrees (interactive TUI)
 wt create my-feat                         # New worktree, opens your IDE
 wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macOS)
-wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of plan
+wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of the default
 wt prune                                  # Remove merged worktrees (per-branch confirm)
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
@@ -52,14 +52,15 @@ wt agent refactor "Refactor API layer" --mode default
 ```
 
 Creates a worktree exactly like `wt create`, then auto-starts your agent
-(default `claude --permission-mode plan`) in Zed's integrated terminal —
-pre-filled with your prompt and left interactive for you to take over.
+(default `claude`, run with `--permission-mode default`) in Zed's integrated
+terminal — pre-filled with your prompt and left interactive for you to take over.
 
-**Available modes** (`--mode`, defaults to `plan`):
+**Available modes** (`--mode`, defaults to `default`; change the default with
+the `agent_mode` config key):
 
-- `default` — Standard interactive mode with approval for each action
+- `default` — Standard interactive mode with approval for each action (default)
 - `acceptEdits` — Allow file changes but keep command execution controlled
-- `plan` — Architecture-first mode with no surprise mutations (default)
+- `plan` — Architecture-first mode with no surprise mutations
 - `auto` — Claude's safety model makes decisions instead of prompting
 - `dontAsk` — Minimal interruptions in trusted environments
 - `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
@@ -159,7 +160,8 @@ Edit with `wt config` (`wt config --path` prints the file location —
 | `worktree_path`       | `"../"`                           | Where worktrees are placed (relative to repo)                                       |
 | `setup_commands`      | `[]`                              | Commands to run in new worktrees                                                    |
 | `teardown_commands`   | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`) |
-| `agent_command`       | `"claude --permission-mode plan"` | Base command; `--permission-mode` replaced by `--mode` option, then prompt appended |
+| `agent_command`       | `"claude"`                        | Base command; `--permission-mode <mode>` injected, then prompt appended             |
+| `agent_mode`          | `"default"`                       | Default permission mode for `wt agent` (overridden by `--mode`)                     |
 | `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses                                    |
 | `auto_refresh_minutes`| `5`                               | How often the interactive list re-fetches worktrees (shows a "last refreshed" header); `0` disables it |
 | `repo_overrides`      | `{}`                              | Per-repo overrides for any key above                                                |

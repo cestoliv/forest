@@ -13,6 +13,7 @@ export interface RepoConfig {
   agent_command: string;
   agent_trigger_chord: string;
   auto_refresh_minutes: number;
+  agent_mode: string;
 }
 
 export interface WtConfig extends RepoConfig {
@@ -27,9 +28,10 @@ export const DEFAULT_CONFIG: WtConfig = {
   teardown_commands: [],
   ide: 'zed',
   ide_open_args: ['-n'],
-  agent_command: 'claude --permission-mode plan',
+  agent_command: 'claude',
   agent_trigger_chord: 'ctrl-shift-cmd-c',
   auto_refresh_minutes: 5,
+  agent_mode: 'default',
   repos: [],
   repo_overrides: {},
 };

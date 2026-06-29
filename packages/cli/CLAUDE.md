@@ -26,7 +26,7 @@ After building, the CLI is available as `wt` (via the `bin` field in package.jso
 - `wt` — Interactive TUI for browsing and opening worktrees
 - `wt create [branch]` — Create a new worktree
 - `wt agent <branch> <plan_prompt> [--mode <mode>]` — Create a worktree and auto-start Claude Code agent in Zed (macOS)
-  - `--mode` — Claude Code permission mode: `default`, `acceptEdits`, `plan` (default), `auto`, `dontAsk`, `bypassPermissions`
+  - `--mode` — Claude Code permission mode: `default` (default), `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`. When omitted, falls back to the `agent_mode` config key (which itself defaults to `default`).
 - `wt prune` — Remove all worktrees whose branch is merged into `base_branch` (per-branch confirmation; also the TUI `P` key)
 - `wt config [--path]` — Open config file or print its path
 - `wt skill` — Print the bundled SKILL.md
@@ -95,7 +95,8 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   writing into a mutable `state` object. `onCreate` runs just those steps; then
   calls `createWorktree(branch, { cwd: pickedRepo })`. `onAgent` appends two more
   steps — `clack.text` (plan) and `clack.select` (permission mode from the
-  exported `VALID_MODES`) — for **worktree → plan → mode**, then calls
+  exported `VALID_MODES`, preselecting the picked repo's effective `agent_mode`)
+  — for **worktree → plan → mode**, then calls
   `createAgentWorktree(branch, plan, { cwd: pickedRepo, mode })`. Both pass the
   resolved repo as `cwd` and the branch explicitly so `prepareWorktree` skips its
   own pickers and only handles create + the existing-worktree prompt. Steps

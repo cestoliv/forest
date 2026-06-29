@@ -32,6 +32,9 @@ export const VALID_MODES = [
 
 type AgentMode = (typeof VALID_MODES)[number];
 
+const isValidMode = (mode: string): mode is AgentMode =>
+  VALID_MODES.includes(mode as AgentMode);
+
 /**
  * Delay after the chord fires before removing the ephemeral .zed task. Kept
  * generous so a slow machine or cold Zed start has read and spawned the task
@@ -52,11 +55,13 @@ export async function createAgentWorktree(
   planPrompt: string,
   options: CreateOptions = {},
 ): Promise<void> {
-  // Validate and normalize the mode
-  const mode = options.mode ?? 'plan';
-  if (!VALID_MODES.includes(mode as AgentMode)) {
+  // Fail fast on an invalid explicit --mode (user input) before creating any
+  // worktree, so a typo never leaves an orphan worktree behind.
+  if (options.mode !== undefined && !isValidMode(options.mode)) {
     console.error(
-      pc.red(`Invalid mode "${mode}". Valid modes: ${VALID_MODES.join(', ')}`),
+      pc.red(
+        `Invalid mode "${options.mode}". Valid modes: ${VALID_MODES.join(', ')}`,
+      ),
     );
     process.exit(1);
   }
@@ -65,6 +70,21 @@ export async function createAgentWorktree(
   if (!prepared) return;
 
   const { status, config, worktreePath } = prepared;
+
+  // Resolve the permission mode: --mode flag → configured agent_mode →
+  // 'default'. --mode is already validated above; a misconfigured (invalid or
+  // empty) agent_mode shouldn't orphan the freshly-created worktree or crash,
+  // so warn and fall back to 'default' instead of exiting.
+  let mode = options.mode ?? config.agent_mode ?? 'default';
+  if (!isValidMode(mode)) {
+    console.warn(
+      pc.yellow(
+        `⚠ Invalid agent_mode "${mode}" in config; using "default". ` +
+          `Valid modes: ${VALID_MODES.join(', ')}`,
+      ),
+    );
+    mode = 'default';
+  }
 
   if (status === 'exists') {
     const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
