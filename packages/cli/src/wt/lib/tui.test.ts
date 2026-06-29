@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Worktree } from './git.js';
 import {
+  buildListLayout,
+  clampScroll,
   filterItems,
   groupByRepo,
   renderBranchInput,
@@ -144,11 +146,120 @@ describe('renderList', () => {
         lastCommit: 'some commit',
       },
     ];
-    const linesWithout = renderList(withoutCommit, 0, '', 'repo').split(
-      '\n',
-    ).length;
-    const linesWith = renderList(withCommit, 0, '', 'repo').split('\n').length;
+    const linesWithout = buildListLayout(withoutCommit, 0, '', 'repo').body
+      .length;
+    const linesWith = buildListLayout(withCommit, 0, '', 'repo').body.length;
     expect(linesWith).toBe(linesWithout + 1);
+  });
+});
+
+describe('buildListLayout', () => {
+  it('splits header, body and footer per mode', () => {
+    const repo = buildListLayout(items, 0, '', 'repo');
+    expect(repo.header.join('\n')).not.toContain('Not in a git repository');
+    expect(repo.header.join('\n')).toContain('> _');
+    expect(repo.footer.join('\n')).toContain('↕ navigate');
+    expect(repo.footer.join('\n')).toContain('C create');
+
+    const global = buildListLayout(items, 0, '', 'global');
+    expect(global.header.join('\n')).toContain('Not in a git repository');
+    expect(global.footer.join('\n')).not.toContain('C create');
+  });
+
+  it('puts repo group headers and items in the body', () => {
+    const { body } = buildListLayout(items, 0, '', 'repo');
+    const text = body.join('\n');
+    expect(text).toContain('REPO');
+    expect(text).toContain('OTHER');
+    expect(text).toContain('my-feature');
+  });
+
+  it('tracks a one-line span for items without a lastCommit', () => {
+    const { itemSpans } = buildListLayout(items, 0, '', 'repo');
+    expect(itemSpans).toHaveLength(3);
+    for (const span of itemSpans) {
+      expect(span.end).toBe(span.start);
+    }
+  });
+
+  it('tracks a two-line span for items with a lastCommit', () => {
+    const withCommit: Worktree[] = [
+      {
+        path: '/projects/repo',
+        branch: 'main',
+        isCurrent: true,
+        repoRoot: '/projects/repo',
+        lastCommit: 'fix: thing',
+      },
+    ];
+    const { itemSpans } = buildListLayout(withCommit, 0, '', 'repo');
+    expect(itemSpans[0].end).toBe(itemSpans[0].start + 1);
+  });
+});
+
+describe('clampScroll', () => {
+  it('returns 0 when everything fits', () => {
+    expect(clampScroll(0, { start: 5, end: 5 }, 20, 10)).toBe(0);
+  });
+
+  it('scrolls up when the selection is above the window', () => {
+    expect(clampScroll(8, { start: 3, end: 3 }, 5, 30)).toBe(3);
+  });
+
+  it('scrolls down when the selection is below the window', () => {
+    // viewport 5, selected end at line 12 -> offset 12 - 5 + 1 = 8
+    expect(clampScroll(0, { start: 12, end: 12 }, 5, 30)).toBe(8);
+  });
+
+  it('leaves a stable offset unchanged when the selection is in view', () => {
+    expect(clampScroll(8, { start: 9, end: 9 }, 5, 30)).toBe(8);
+  });
+
+  it('never exceeds the maximum offset', () => {
+    expect(clampScroll(0, { start: 29, end: 29 }, 5, 30)).toBe(25);
+  });
+});
+
+describe('renderList viewport', () => {
+  const many: Worktree[] = Array.from({ length: 30 }, (_, n) => ({
+    path: `/projects/repo-${n}`,
+    branch: `branch-${n}`,
+    isCurrent: false,
+    repoRoot: '/projects/repo',
+  }));
+
+  it('never renders more lines than the terminal height', () => {
+    const lineCount = renderList(many, 0, '', 'repo', 10).split('\n').length;
+    expect(lineCount).toBeLessThanOrEqual(10);
+  });
+
+  it('always keeps the search line and footer visible', () => {
+    const output = renderList(many, 0, '', 'repo', 10);
+    expect(output).toContain('> _');
+    expect(output).toContain('↕ navigate');
+  });
+
+  it('keeps the selected item visible when it is far down the list', () => {
+    const output = renderList(many, 29, '', 'repo', 10);
+    expect(output).toContain('branch-29');
+  });
+
+  it('shows a down indicator but no up indicator at the top', () => {
+    const output = renderList(many, 0, '', 'repo', 10);
+    expect(output).toContain('↓ more');
+    expect(output).not.toContain('↑ more');
+  });
+
+  it('shows an up indicator once scrolled to the bottom', () => {
+    const output = renderList(many, 29, '', 'repo', 10);
+    expect(output).toContain('↑ more');
+    expect(output).not.toContain('↓ more');
+  });
+
+  it('pins the footer to the bottom when content is shorter than the terminal', () => {
+    const lines = renderList(items, 0, '', 'repo', 20).split('\n');
+    expect(lines).toHaveLength(20);
+    expect(lines[lines.length - 1]).toContain('↕ navigate');
   });
 });
 
