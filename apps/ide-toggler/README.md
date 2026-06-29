@@ -16,8 +16,9 @@ ide-toggler sits as a floating, always-on-top panel. It enumerates your open edi
   - `idle` — all sessions for this window are waiting for your next message
   - `no-agent` — the window is open but no supported agent session is associated with it
 - **Idle chime + animation** — when a window transitions from working to idle, the macOS "Glass" sound plays and the status icon animates. The animation always runs; the sound can be muted.
+- **Live state timer** — each row shows how long its window has been in its current state (e.g. `5m 12s`, `2h 30m`), so you can see at a glance which project has been stuck the longest. Timers survive an app/extension restart.
 - **Always-on-top floating panel** — uses a non-activating `NSPanel` at floating level that joins all Spaces, so it stays visible without ever stealing focus from the editor.
-- **Three ordering modes** — sort the window list by status priority (default), alphabetically, or most-recently-active.
+- **Four ordering modes** — sort the window list by status priority (default), alphabetically, most-recently-active, or stuck duration (longest in its current state first).
 - **Persistent settings** — order mode and mute preference are stored in `UserDefaults` and survive relaunches.
 
 ## Repository layout

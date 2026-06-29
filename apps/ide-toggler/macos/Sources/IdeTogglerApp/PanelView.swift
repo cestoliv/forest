@@ -2,6 +2,16 @@ import SwiftUI
 import AppKit
 import IdeTogglerCore
 
+/// Compact two-unit elapsed-time label for the per-row state timer (e.g. `45s`,
+/// `5m 12s`, `2h 30m`, `3d 4h`). Mirrors `formatDuration` in the Linux build.
+func formatStuckDuration(_ interval: TimeInterval) -> String {
+    let s = Int(max(0, interval))
+    if s < 60 { return "\(s)s" }
+    if s < 3600 { return "\(s / 60)m \(s % 60)s" }
+    if s < 86_400 { return "\(s / 3600)h \((s % 3600) / 60)m" }
+    return "\(s / 86_400)d \((s % 86_400) / 3600)h"
+}
+
 // MARK: - Status grouping
 /// The three groups shown in the popup. `idle` and `noAgent` collapse together
 /// (a window with no agent is just another quiet window — ball's in your court).
@@ -29,6 +39,12 @@ public struct PanelView: View {
     @ObservedObject var store: StatusAggregatorStore
     let raiser: WindowRaising
     let settingsStore: SettingsStore
+
+    /// One shared clock for every row's live state timer — a single 1s tick rather than
+    /// a Timer per row. Ticking only re-renders the elapsed labels; it never reorders the
+    /// list (`orderKey` ignores `now`), so `stuckDuration` order is stable between refreshes.
+    @State private var now = Date()
+    private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     public init(store: StatusAggregatorStore, raiser: WindowRaising, settingsStore: SettingsStore) {
         self.store = store; self.raiser = raiser; self.settingsStore = settingsStore
@@ -124,6 +140,7 @@ public struct PanelView: View {
         .frame(width: 300)
         .modifier(GlassSurface())
         .preferredColorScheme(.dark)
+        .onReceive(clock) { now = $0 }
     }
 
     private func rowView(for row: WindowRow) -> some View {
@@ -131,6 +148,7 @@ public struct PanelView: View {
         // persists and clears correctly even in compact mode where only one row mounts.
         GlassRow(
             row: row,
+            now: now,
             blinking: store.blinkingWindowIDs.contains(row.window.id),
             showIDEBadge: showsIDEBadges,
             onTap: {
@@ -192,6 +210,7 @@ private struct CompactHeader: View {
 // MARK: - Row
 private struct GlassRow: View {
     let row: WindowRow
+    let now: Date
     let blinking: Bool
     let showIDEBadge: Bool
     let onTap: () -> Void
@@ -225,6 +244,15 @@ private struct GlassRow: View {
                     .truncationMode(.tail)
 
                 Spacer(minLength: 4)
+
+                // Live timer: how long this window has been in its current state.
+                // Absent for noAgent rows (no meaningful state duration).
+                if let entered = row.stateEnteredAt {
+                    Text(formatStuckDuration(now.timeIntervalSince(entered)))
+                        .font(.system(size: 11, weight: .medium).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.4))
+                        .lineLimit(1)
+                }
 
                 if showIDEBadge {
                     ideBadge(for: row.window.ide)

@@ -20,6 +20,7 @@ public struct SettingsView: View {
                 Text("Status priority").tag(OrderMode.statusPriority)
                 Text("Alphabetical").tag(OrderMode.alphabetical)
                 Text("Recently active").tag(OrderMode.recentlyActive)
+                Text("Stuck duration").tag(OrderMode.stuckDuration)
             }
             Toggle("Mute sound", isOn: Binding(
                 get: { store.settings.muted },

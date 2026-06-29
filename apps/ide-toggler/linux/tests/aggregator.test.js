@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
     collapseState, priorityRank, groupForState, ORDER_MODES,
     buildRows, compactRow, detectTransitions, nextBlinkSet,
+    computeStateEntryTimes,
 } from '../gnome-extension/ide-toggler@cestoliv.com/lib/aggregator.js';
 import {win, session} from './helpers.js';
 
@@ -142,6 +143,56 @@ test('recentlyActive sorts by max updatedAt desc, inactive last then alphabetica
     assert.deepEqual(rows.map(r => r.window.folder), ['new', 'old', 'aaa', 'zzz']);
 });
 
+test('stuckDuration sorts by time-in-state (longest first), noAgent last', () => {
+    const stateEntryTimes = new Map([
+        ['w-recent', 200], // entered later -> stuck less
+        ['w-stuck', 100],  // entered earliest -> stuck longest -> first
+        ['w-none', 150],   // noAgent: stateEnteredAt nulled out -> last
+    ]);
+    const rows = buildRows({
+        windows: [win('w-recent', 'recent'), win('w-stuck', 'stuck'), win('w-none', 'none')],
+        sessions: [
+            session(1, '/x/recent', 'busy'),
+            session(2, '/x/stuck', 'waiting'),
+            // w-none has no session -> noAgent
+        ],
+        activity: new Map(),
+        orderMode: 'stuckDuration',
+        stateEntryTimes,
+    });
+    assert.deepEqual(rows.map(r => r.window.folder), ['stuck', 'recent', 'none']);
+});
+
+test('buildRows nulls stateEnteredAt for noAgent rows', () => {
+    const rows = buildRows({
+        windows: [win('w1', 'proj')],
+        sessions: [],
+        activity: new Map(),
+        orderMode: 'stuckDuration',
+        stateEntryTimes: new Map([['w1', 100]]),
+    });
+    assert.equal(rows[0].state, 'noAgent');
+    assert.equal(rows[0].stateEnteredAt, null);
+});
+
+// --- computeStateEntryTimes -------------------------------------------------
+test('computeStateEntryTimes carries unchanged, resets on change, inits new', () => {
+    const prev = new Map([
+        ['keep', {state: 'working', enteredAt: 100}],
+        ['changed', {state: 'working', enteredAt: 100}],
+    ]);
+    const next = new Map([
+        ['keep', 'working'],         // unchanged -> carries 100
+        ['changed', 'idle'],         // changed -> reset to now
+        ['fresh', 'needsAttention'], // new -> now
+    ]);
+    const out = computeStateEntryTimes(prev, next, 500);
+    assert.equal(out.get('keep'), 100);
+    assert.equal(out.get('changed'), 500);
+    assert.equal(out.get('fresh'), 500);
+    assert.equal(out.has('gone'), false); // windows absent from next are dropped
+});
+
 // --- compactRow -------------------------------------------------------------
 test('compactRow prefers the most-recently-active needs-attention row', () => {
     const rows = [
@@ -209,5 +260,5 @@ test('nextBlinkSet: a fresh transition replaces the blink set entirely', () => {
 });
 
 test('ORDER_MODES is the canonical list', () => {
-    assert.deepEqual(ORDER_MODES, ['statusPriority', 'alphabetical', 'recentlyActive']);
+    assert.deepEqual(ORDER_MODES, ['statusPriority', 'alphabetical', 'recentlyActive', 'stuckDuration']);
 });

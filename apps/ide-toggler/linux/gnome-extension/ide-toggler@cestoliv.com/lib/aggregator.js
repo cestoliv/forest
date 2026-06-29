@@ -4,7 +4,7 @@
 
 import {cwdMatchesFolder} from './sessions.js';
 
-export const ORDER_MODES = ['statusPriority', 'alphabetical', 'recentlyActive'];
+export const ORDER_MODES = ['statusPriority', 'alphabetical', 'recentlyActive', 'stuckDuration'];
 
 // Collapse a window's matched session statuses into one window state (§5).
 export function collapseState(matchedStatuses) {
@@ -43,9 +43,13 @@ export function groupForState(state) {
 //   sessions: [{ pid, cwd, status, updatedAt }]
 //   activity: Map<pid, updatedAt>
 //   orderMode: one of ORDER_MODES
-// Returns: [{ window, state, lastActive }]
-export function buildRows({windows, sessions, activity, orderMode}) {
+//   stateEntryTimes: Map<windowId, enteredAtMs> — when each window entered its current
+//                    state; drives the live timer and `stuckDuration` order. noAgent rows
+//                    carry no duration (stateEnteredAt = null).
+// Returns: [{ window, state, lastActive, stateEnteredAt }]
+export function buildRows({windows, sessions, activity, orderMode, stateEntryTimes}) {
     const act = activity ?? new Map();
+    const entered = stateEntryTimes ?? new Map();
     const rows = windows.map(w => {
         const matched = sessions.filter(s => cwdMatchesFolder(s.cwd, w.folder));
         const state = collapseState(matched.map(s => s.status));
@@ -55,7 +59,8 @@ export function buildRows({windows, sessions, activity, orderMode}) {
             if (Number.isFinite(a) && a > lastActive)
                 lastActive = a;
         }
-        return {window: w, state, lastActive};
+        const stateEnteredAt = state === 'noAgent' ? null : (entered.get(w.id) ?? null);
+        return {window: w, state, lastActive, stateEnteredAt};
     });
 
     const byFolder = (a, b) =>
@@ -75,6 +80,21 @@ export function buildRows({windows, sessions, activity, orderMode}) {
                 return 1;
             return byFolder(a, b);
         });
+    } else if (orderMode === 'stuckDuration') {
+        rows.sort((a, b) => {
+            const ax = a.stateEnteredAt != null;
+            const bx = b.stateEnteredAt != null;
+            if (ax && bx) {
+                if (a.stateEnteredAt !== b.stateEnteredAt)
+                    return a.stateEnteredAt - b.stateEnteredAt; // earlier = stuck longer = first
+                return byFolder(a, b);
+            }
+            if (ax)
+                return -1; // has a duration -> before noAgent
+            if (bx)
+                return 1;
+            return byFolder(a, b);
+        });
     } else {
         rows.sort((a, b) => {
             const ra = priorityRank(a.state), rb = priorityRank(b.state);
@@ -84,6 +104,27 @@ export function buildRows({windows, sessions, activity, orderMode}) {
         });
     }
     return rows;
+}
+
+// Per-window state-entry times, given the previous snapshot and the new states.
+// A window keeps its previous enteredAt while its state is unchanged; on any state
+// change (or a brand-new window) it resets to `now`. Mirrors the macOS
+// Aggregator.stateEntryTimes. Seed prevEntries from the persisted state file on load
+// to keep timers running across an extension reload.
+//   prevEntries: Map<windowId, { state, enteredAt }>
+//   newStates:   Map<windowId, state>
+//   now:         epoch ms
+// Returns: Map<windowId, enteredAtMs>
+export function computeStateEntryTimes(prevEntries, newStates, now) {
+    const result = new Map();
+    for (const [id, state] of newStates) {
+        const prev = prevEntries.get(id);
+        if (prev && prev.state === state)
+            result.set(id, prev.enteredAt);
+        else
+            result.set(id, now);
+    }
+    return result;
 }
 
 // Compact-mode row selection (mirrors macOS StatusAggregatorStore.compactRow):

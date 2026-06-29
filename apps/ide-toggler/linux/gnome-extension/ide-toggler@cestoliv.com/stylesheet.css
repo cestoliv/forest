@@ -146,6 +146,15 @@
     color: rgba(255, 255, 255, 0.55);
 }
 
+/* --- Live state timer -------------------------------------------------- */
+/* Dimmed elapsed-time label (time in current state); sits left of the badge. */
+.ide-toggler-timer {
+    font-size: 11px;
+    font-feature-settings: "tnum";
+    color: rgba(255, 255, 255, 0.4);
+    padding: 0 6px;
+}
+
 /* --- IDE badge --------------------------------------------------------- */
 .ide-toggler-badge {
     font-size: 9px;

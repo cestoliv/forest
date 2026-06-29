@@ -22,7 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             windowSource: windowSource,
             sessionSource: sessionSource,
             chime: chime,
-            settings: settingsStore.load())
+            settings: settingsStore.load(),
+            stateStore: UserDefaultsStateTimestampStore())
         self.store = store
         store.start()
 

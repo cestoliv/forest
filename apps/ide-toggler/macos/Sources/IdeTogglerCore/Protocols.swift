@@ -34,6 +34,22 @@ public protocol SettingsStore: AnyObject {
     func save(_ settings: Settings)
 }
 
+/// Persists per-window state-entry timestamps (keyed by EditorWindow.id) so the
+/// per-row live timer survives an app restart. Only windows present at save time are
+/// kept, so stale entries are pruned automatically.
+public protocol StateTimestampStore: AnyObject {
+    func load() -> [String: StateEntry]
+    func save(_ entries: [String: StateEntry])
+}
+
+/// Non-persisting StateTimestampStore (default for tests / when persistence is unwired).
+public final class InMemoryStateTimestampStore: StateTimestampStore {
+    private var entries: [String: StateEntry]
+    public init(_ entries: [String: StateEntry] = [:]) { self.entries = entries }
+    public func load() -> [String: StateEntry] { entries }
+    public func save(_ entries: [String: StateEntry]) { self.entries = entries }
+}
+
 /// Liveness probe — MUST be implemented with kill(pid, 0) (signal 0, no signal sent).
 public protocol LivenessChecker {
     func isAlive(pid: Int32) -> Bool

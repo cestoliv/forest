@@ -216,13 +216,36 @@ layer-shell).
 
 - **Order modes:** `statusPriority` (default — by collapsed state rank, then folder name
   case-insensitive), `alphabetical` (folder name), `recentlyActive` (max `updatedAt` of
-  matched sessions desc; windows with no activity sort last, then alphabetical).
+  matched sessions desc; windows with no activity sort last, then alphabetical),
+  `stuckDuration` (longest time in current state first — see §7.1; `noAgent` rows have no
+  duration and sort last, then alphabetical). Flat list (no group headers).
 - **Grouping:** in `statusPriority` mode rows are grouped under headers
   Needs you / Working / Idle (idle and noAgent collapse into "Idle"). Flat list otherwise.
 - **IDE badge:** show a per-row IDE badge (`ZED` / `VS` / `WS`) **only when more than one
   IDEKind is present** across the visible rows; otherwise omit it (no value when all rows
   are the same editor).
 - **Settings:** order mode, mute, compact mode — persisted locally.
+
+### 7.1 Per-row state timer
+
+Each row shows a live timer of how long its window has been in its **current** collapsed
+state, e.g. `45s`, `5m 12s`, `2h 30m`, `3d 4h` (two-unit, ticking ~1s). Shown for
+`needsAttention` / `working` / `idle`; **omitted for `noAgent`** (no meaningful state
+duration).
+
+- **State-entry time:** per window, the timestamp it entered its current state. On **any**
+  state change (not just the working→idle chime transition of §5) it resets to now; a
+  brand-new window starts at now. This is a more general signal than the chime trigger —
+  track it separately.
+- **Persistence:** the `{ windowId → (state, enteredAt) }` map is persisted locally
+  (macOS `UserDefaults`; Linux `~/.config/ide-toggler-state.json`) so the timer survives an
+  app/extension restart. On load, a window's persisted `enteredAt` is restored **only if**
+  its freshly computed state still matches the persisted state; otherwise it resets to now.
+  Entries for windows no longer present are pruned on save (only current ids are kept).
+- **Limitation:** keys are window ids, which are stable only while the editor window lives.
+  If the **editor** restarts, the OS window id changes and the timer resets — accepted, as
+  it is genuinely a new window. Only an *app/extension* restart (editor still open) keeps
+  the timer running.
 
 ---
 

@@ -23,7 +23,9 @@ import {
   compactRow,
   detectTransitions,
   nextBlinkSet,
+  computeStateEntryTimes,
 } from "./lib/aggregator.js";
+import { formatDuration } from "./lib/format.js";
 import {
   setCairo,
   makeStatusIcon,
@@ -120,6 +122,8 @@ export default class IdeTogglerExtension extends Extension {
     this._iconActors = []; // animated icons to stop on refresh
     this._dragging = false; // grip-handle drag in progress
     this._dragGrab = null; // active Clutter pointer grab, if any
+    this._timerLabels = []; // live state-timer labels, refreshed every 1s
+    this._timerTickId = 0; // 1s GLib timeout updating the timers
 
     // --- settings ---
     this._settingsPath = GLib.build_filenamev([
@@ -127,6 +131,13 @@ export default class IdeTogglerExtension extends Extension {
       "ide-toggler.json",
     ]);
     this._settings = this._loadSettings();
+
+    // --- per-row state timer (persisted across reloads) ---
+    this._stateFilePath = GLib.build_filenamev([
+      GLib.get_user_config_dir(),
+      "ide-toggler-state.json",
+    ]);
+    this._stateEntries = this._loadStateFile(); // id -> { state, enteredAt }
 
     // --- window tracking ---
     const display = global.display;
@@ -174,6 +185,17 @@ export default class IdeTogglerExtension extends Extension {
       () => {
         this._reloadSessions();
         this._refreshUi();
+        return GLib.SOURCE_CONTINUE;
+      },
+    );
+
+    // --- live state-timer tick (1s) ---
+    // Only updates the elapsed-time label texts; no rebuild, so it's cheap.
+    this._timerTickId = GLib.timeout_add_seconds(
+      GLib.PRIORITY_DEFAULT,
+      1,
+      () => {
+        this._updateTimers();
         return GLib.SOURCE_CONTINUE;
       },
     );
@@ -227,6 +249,51 @@ export default class IdeTogglerExtension extends Extension {
     } catch (e) {
       logError(e, "ide-toggler: failed to save settings");
     }
+  }
+
+  // --- per-row state-timer persistence (separate from config) ---
+  // Stored as { id: { state, enteredAt } } in ide-toggler-state.json so the per-row
+  // timer survives an extension reload. Returns a Map<id, {state, enteredAt}>.
+  _loadStateFile() {
+    try {
+      const file = Gio.File.new_for_path(this._stateFilePath);
+      const [ok, contents] = file.load_contents(null);
+      if (!ok) return new Map();
+      const obj = JSON.parse(new TextDecoder().decode(contents));
+      const map = new Map();
+      for (const [id, e] of Object.entries(obj)) {
+        if (e && typeof e.state === "string" && Number.isFinite(e.enteredAt))
+          map.set(id, { state: e.state, enteredAt: e.enteredAt });
+      }
+      return map;
+    } catch (_e) {
+      return new Map();
+    }
+  }
+
+  _saveStateFile() {
+    try {
+      const obj = {};
+      for (const [id, e] of this._stateEntries) obj[id] = e;
+      const file = Gio.File.new_for_path(this._stateFilePath);
+      file.replace_contents(
+        new TextEncoder().encode(JSON.stringify(obj)),
+        null,
+        false,
+        Gio.FileCreateFlags.REPLACE_DESTINATION,
+        null,
+      );
+    } catch (e) {
+      logError(e, "ide-toggler: failed to save state file");
+    }
+  }
+
+  // Update the live timer labels in place (called every 1s). Cheap text-only update.
+  _updateTimers() {
+    if (!this._timerLabels || this._timerLabels.length === 0) return;
+    const now = Date.now();
+    for (const { label, enteredAt } of this._timerLabels)
+      label.text = formatDuration(now - enteredAt);
   }
 
   // --- window signal tracking ---
@@ -476,16 +543,6 @@ export default class IdeTogglerExtension extends Extension {
     return windows;
   }
 
-  // --- build rows (delegates ordering/matching to the pure aggregator) ---
-  _buildRows() {
-    return buildRows({
-      windows: this._enumerateEditorWindows(),
-      sessions: this._sessions,
-      activity: this._activity,
-      orderMode: this._settings.orderMode,
-    });
-  }
-
   // ---------------------------------------------------------------------
   // UI
   // ---------------------------------------------------------------------
@@ -708,6 +765,7 @@ export default class IdeTogglerExtension extends Extension {
       statusPriority: "Status priority",
       alphabetical: "Alphabetical",
       recentlyActive: "Recently active",
+      stuckDuration: "Stuck duration",
     };
     this._orderItems = {};
     const orderHeader = new PopupMenu.PopupMenuItem("Order", {
@@ -834,12 +892,37 @@ export default class IdeTogglerExtension extends Extension {
   _refreshUi() {
     if (!this._content) return;
 
-    const rows = this._buildRows();
+    const now = Date.now();
+    const windows = this._enumerateEditorWindows();
+
+    // First pass: resolve each window's state (ordering irrelevant here) so we can
+    // carry/reset its state-entry time, then persist the snapshot (which prunes
+    // windows that have disappeared, since only current ids are kept).
+    const stateRows = buildRows({
+      windows,
+      sessions: this._sessions,
+      activity: this._activity,
+      orderMode: "statusPriority",
+    });
+    const newStates = new Map();
+    for (const r of stateRows) newStates.set(r.window.id, r.state);
+
+    const entryTimes = computeStateEntryTimes(this._stateEntries, newStates, now);
+    this._stateEntries = new Map();
+    for (const [id, state] of newStates)
+      this._stateEntries.set(id, { state, enteredAt: entryTimes.get(id) });
+    this._saveStateFile();
+
+    // Second pass: ordered rows carrying stateEnteredAt (drives the timer + stuck sort).
+    const rows = buildRows({
+      windows,
+      sessions: this._sessions,
+      activity: this._activity,
+      orderMode: this._settings.orderMode,
+      stateEntryTimes: entryTimes,
+    });
 
     // --- transition detection: working -> idle ---
-    const newStates = new Map();
-    for (const r of rows) newStates.set(r.window.id, r.state);
-
     const transitions = detectTransitions(this._prevStates, newStates);
     this._blinking = nextBlinkSet(this._blinking, rows, transitions);
     if (transitions.length && !this._settings.muted) this._playChime();
@@ -847,6 +930,7 @@ export default class IdeTogglerExtension extends Extension {
 
     // --- rebuild content ---
     this._stopIconAnimations();
+    this._timerLabels = []; // old labels are about to be destroyed
     this._content.destroy_all_children();
 
     if (rows.length === 0) {
@@ -1031,6 +1115,18 @@ export default class IdeTogglerExtension extends Extension {
     name.clutter_text.set_ellipsize(3); // PANGO_ELLIPSIZE_END
     hbox.add_child(name);
 
+    // Live timer: how long this window has been in its current state. Absent for
+    // noAgent rows (no meaningful state duration). Updated in place by _updateTimers.
+    if (row.stateEnteredAt != null) {
+      const timer = new St.Label({
+        style_class: "ide-toggler-timer",
+        text: formatDuration(Date.now() - row.stateEnteredAt),
+        y_align: Clutter.ActorAlign.CENTER,
+      });
+      hbox.add_child(timer);
+      this._timerLabels.push({ label: timer, enteredAt: row.stateEnteredAt });
+    }
+
     // Trailing group: the IDE badge sits flush to the right edge at rest, and the
     // chevron is collapsed to ZERO width by default — so it reserves no space and
     // leaves no empty gap. On hover it eases open (width + opacity), pushing the
@@ -1192,6 +1288,10 @@ export default class IdeTogglerExtension extends Extension {
       GLib.source_remove(this._backstopId);
       this._backstopId = 0;
     }
+    if (this._timerTickId) {
+      GLib.source_remove(this._timerTickId);
+      this._timerTickId = 0;
+    }
 
     this._stopIconAnimations();
 
@@ -1281,6 +1381,8 @@ export default class IdeTogglerExtension extends Extension {
     this._prevStates = null;
     this._blinking = null;
     this._iconActors = [];
+    this._timerLabels = [];
+    this._stateEntries = null;
 
     if (this._ownerId) {
       Gio.bus_unown_name(this._ownerId);

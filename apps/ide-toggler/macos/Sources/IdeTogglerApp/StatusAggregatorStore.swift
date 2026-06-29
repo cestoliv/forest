@@ -19,17 +19,24 @@ public final class StatusAggregatorStore: ObservableObject {
     private let windowSource: WindowSource
     private let sessionSource: SessionSource
     private let chime: ChimePlayer
+    private let stateStore: StateTimestampStore
     private var previousStates: [String: WindowState] = [:]
+    /// Per-window state + entry time, carried across refreshes and persisted so the
+    /// per-row timer survives an app restart. Seeded from disk on launch.
+    private var stateEntries: [String: StateEntry]
 
     public init(
         windowSource: WindowSource,
         sessionSource: SessionSource,
         chime: ChimePlayer,
-        settings: Settings
+        settings: Settings,
+        stateStore: StateTimestampStore = InMemoryStateTimestampStore()
     ) {
         self.windowSource = windowSource
         self.sessionSource = sessionSource
         self.chime = chime
+        self.stateStore = stateStore
+        self.stateEntries = stateStore.load()
         self.settings = settings
         self.windowSource.onChange = { [weak self] in self?.refresh() }
         self.sessionSource.onChange = { [weak self] in self?.refresh() }
@@ -46,10 +53,23 @@ public final class StatusAggregatorStore: ObservableObject {
         let windows = windowSource.currentWindows()
         let sessions = sessionSource.currentSessions()
         let activity = sessionSource.activity()
+        let now = Date()
+
+        // Resolve each window's state, then carry/reset its state-entry time (the timer
+        // origin). Done before ordering so `stuckDuration` and the row timer can use it.
+        let currentStates = Dictionary(
+            uniqueKeysWithValues: windows.map { ($0.id, Aggregator.state(for: $0, sessions: sessions)) })
+        let entryTimes = Aggregator.stateEntryTimes(
+            previous: stateEntries, current: currentStates, now: now)
+        stateEntries = currentStates.reduce(into: [:]) { acc, kv in
+            acc[kv.key] = StateEntry(state: kv.value, enteredAt: entryTimes[kv.key] ?? now)
+        }
+        stateStore.save(stateEntries)  // prunes vanished windows (only current ids kept)
 
         let newRows = Aggregator.rows(
             windows: windows, sessions: sessions,
-            mode: settings.orderMode, now: Date(), activity: activity)
+            mode: settings.orderMode, now: now, activity: activity,
+            stateEnteredAt: entryTimes)
 
         let newStates = Aggregator.stateSnapshot(rows: newRows)
         let transitions = Aggregator.workingToIdleTransitions(

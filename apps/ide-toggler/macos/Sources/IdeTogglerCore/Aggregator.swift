@@ -32,20 +32,26 @@ public enum Aggregator {
     }
 
     /// Build ordered rows. `activity` maps session pid -> last-updated time so
-    /// recently-active ordering and lastActive can be computed.
+    /// recently-active ordering and lastActive can be computed. `stateEnteredAt` maps
+    /// window id -> the time that window entered its current state (drives the live
+    /// timer and `stuckDuration` ordering); `noAgent` rows carry no duration.
     public static func rows(
         windows: [EditorWindow],
         sessions: [Session],
         mode: OrderMode,
         now: Date?,
-        activity: [Int32: Date] = [:]
+        activity: [Int32: Date] = [:],
+        stateEnteredAt: [String: Date] = [:]
     ) -> [WindowRow] {
         let unordered = windows.map { win -> WindowRow in
             let matched = self.sessions(for: win, in: sessions)
             let lastActive = matched.compactMap { activity[$0.pid] }.max()
+            let state = state(for: win, sessions: sessions)
+            let entered = state == .noAgent ? nil : stateEnteredAt[win.id]
             return WindowRow(window: win,
-                             state: state(for: win, sessions: sessions),
-                             lastActive: lastActive)
+                             state: state,
+                             lastActive: lastActive,
+                             stateEnteredAt: entered)
         }
         return order(rows: unordered, mode: mode)
     }
@@ -82,7 +88,41 @@ public enum Aggregator {
                     return a.window.folder.localizedCaseInsensitiveCompare(b.window.folder) == .orderedAscending
                 }
             }
+        case .stuckDuration:
+            return rows.sorted { a, b in
+                switch (a.stateEnteredAt, b.stateEnteredAt) {
+                case let (x?, y?):
+                    if x != y { return x < y }   // entered earlier -> stuck longer -> first
+                    return a.window.folder.localizedCaseInsensitiveCompare(b.window.folder) == .orderedAscending
+                case (_?, nil):    return true   // has a duration -> before noAgent
+                case (nil, _?):    return false
+                case (nil, nil):
+                    return a.window.folder.localizedCaseInsensitiveCompare(b.window.folder) == .orderedAscending
+                }
+            }
         }
+    }
+
+    /// Per-window state-entry times, given the previous snapshot and the new states.
+    /// A window keeps its previous `enteredAt` while its state is unchanged; on any
+    /// state change (or a brand-new window) the entry time resets to `now`. Pure and
+    /// independent of `workingToIdleTransitions` (which is only the chime trigger).
+    /// Seed `previous` from persisted state on launch to keep timers running across an
+    /// app restart (entries whose persisted state no longer matches reset to `now`).
+    public static func stateEntryTimes(
+        previous: [String: StateEntry],
+        current: [String: WindowState],
+        now: Date
+    ) -> [String: Date] {
+        var result: [String: Date] = [:]
+        for (id, state) in current {
+            if let prev = previous[id], prev.state == state {
+                result[id] = prev.enteredAt
+            } else {
+                result[id] = now
+            }
+        }
+        return result
     }
 
     /// Window ids that moved from .working back to the quiet idle group between

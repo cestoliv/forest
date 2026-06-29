@@ -12,7 +12,7 @@ public enum AgentStatus: String, Equatable, Sendable {
 }
 
 /// The four collapsed visual states for a window (priority order top-to-bottom).
-public enum WindowState: String, Equatable, Sendable, CaseIterable {
+public enum WindowState: String, Equatable, Sendable, CaseIterable, Codable {
     case needsAttention   // any session waiting
     case working          // any session busy/shell
     case idle             // all sessions idle
@@ -110,8 +110,24 @@ public struct WindowRow: Equatable, Sendable {
     public let state: WindowState
     /// Most recent session activity time for this window, for recently-active ordering.
     public let lastActive: Date?
-    public init(window: EditorWindow, state: WindowState, lastActive: Date?) {
+    /// When this window entered its current `state` — drives the per-row live timer and
+    /// the `stuckDuration` ordering. `nil` for `noAgent` (no meaningful state duration).
+    public let stateEnteredAt: Date?
+    public init(window: EditorWindow, state: WindowState, lastActive: Date?,
+                stateEnteredAt: Date? = nil) {
         self.window = window; self.state = state; self.lastActive = lastActive
+        self.stateEnteredAt = stateEnteredAt
+    }
+}
+
+/// A window's current state plus when it entered that state. Tracked across refreshes
+/// and persisted so the per-row timer survives an app restart (see
+/// `Aggregator.stateEntryTimes`). `Codable` for the persistence layer.
+public struct StateEntry: Equatable, Sendable, Codable {
+    public let state: WindowState
+    public let enteredAt: Date
+    public init(state: WindowState, enteredAt: Date) {
+        self.state = state; self.enteredAt = enteredAt
     }
 }
 
@@ -119,6 +135,7 @@ public enum OrderMode: String, Equatable, Sendable, CaseIterable {
     case statusPriority   // default
     case alphabetical
     case recentlyActive
+    case stuckDuration    // longest time-in-current-state first; noAgent last
 }
 
 public struct Settings: Equatable, Sendable {

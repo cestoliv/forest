@@ -46,6 +46,55 @@ final class AggregatorOrderingTests: XCTestCase {
         XCTAssertEqual(ordered.map { $0.window.folder }, ["new", "old", "never"])
     }
 
+    func test_stuckDuration_longestInStateFirst_noAgentLast() {
+        let t0 = Date(timeIntervalSince1970: 100)  // entered earliest -> stuck longest
+        let t1 = Date(timeIntervalSince1970: 200)
+        let rows = [
+            WindowRow(window: win("1", "recent"), state: .working, lastActive: nil, stateEnteredAt: t1),
+            WindowRow(window: win("2", "stuck"), state: .needsAttention, lastActive: nil, stateEnteredAt: t0),
+            WindowRow(window: win("3", "none"), state: .noAgent, lastActive: nil, stateEnteredAt: nil),
+        ]
+        let ordered = Aggregator.order(rows: rows, mode: .stuckDuration)
+        XCTAssertEqual(ordered.map { $0.window.folder }, ["stuck", "recent", "none"])
+    }
+
+    func test_stuckDuration_tiesBrokenAlphabetically() {
+        let t = Date(timeIntervalSince1970: 100)
+        let rows = [
+            WindowRow(window: win("1", "zeta"), state: .idle, lastActive: nil, stateEnteredAt: t),
+            WindowRow(window: win("2", "alpha"), state: .idle, lastActive: nil, stateEnteredAt: t),
+        ]
+        let ordered = Aggregator.order(rows: rows, mode: .stuckDuration)
+        XCTAssertEqual(ordered.map { $0.window.folder }, ["alpha", "zeta"])
+    }
+
+    func test_rows_noAgentRowsCarryNoStateEnteredAt() {
+        let w = win("w1", "proj")  // no matching session -> noAgent
+        let rows = Aggregator.rows(windows: [w], sessions: [], mode: .stuckDuration,
+                                   now: nil, stateEnteredAt: ["w1": Date(timeIntervalSince1970: 100)])
+        XCTAssertEqual(rows.first?.state, .noAgent)
+        XCTAssertNil(rows.first?.stateEnteredAt)
+    }
+
+    func test_stateEntryTimes_carriesUnchanged_resetsOnChange_initsNew() {
+        let old = Date(timeIntervalSince1970: 100)
+        let now = Date(timeIntervalSince1970: 500)
+        let previous: [String: StateEntry] = [
+            "keep": StateEntry(state: .working, enteredAt: old),
+            "changed": StateEntry(state: .working, enteredAt: old),
+        ]
+        let current: [String: WindowState] = [
+            "keep": .working,            // unchanged -> carries old
+            "changed": .idle,            // changed -> resets to now
+            "fresh": .needsAttention,    // brand new -> now
+        ]
+        let result = Aggregator.stateEntryTimes(previous: previous, current: current, now: now)
+        XCTAssertEqual(result["keep"], old)
+        XCTAssertEqual(result["changed"], now)
+        XCTAssertEqual(result["fresh"], now)
+        XCTAssertNil(result["gone"])  // windows absent from `current` are dropped
+    }
+
     func test_rows_populatesLastActiveFromMostRecentMatchedSession() {
         let w = win("w1", "proj")
         let early = Session(pid: 1, cwd: "/x/proj", status: .idle)

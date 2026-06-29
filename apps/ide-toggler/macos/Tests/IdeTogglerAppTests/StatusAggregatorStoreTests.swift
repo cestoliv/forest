@@ -26,6 +26,13 @@ private final class MockSessionSource: SessionSource {
 private final class SpyChime: ChimePlayer {
     var count = 0; func playChime() { count += 1 }
 }
+private final class SpyStateStore: StateTimestampStore {
+    var saved: [String: StateEntry]
+    private let seed: [String: StateEntry]
+    init(seed: [String: StateEntry] = [:]) { self.seed = seed; self.saved = seed }
+    func load() -> [String: StateEntry] { seed }
+    func save(_ entries: [String: StateEntry]) { saved = entries }
+}
 
 final class StatusAggregatorStoreTests: XCTestCase {
     func test_initialRows_reflectJoinedState() {
@@ -71,6 +78,50 @@ final class StatusAggregatorStoreTests: XCTestCase {
             chime: SpyChime(), settings: Settings(orderMode: .alphabetical, muted: false))
         store.refresh()
         XCTAssertEqual(store.rows.map { $0.window.folder }, ["alpha", "zeta"])
+    }
+
+    // MARK: - State timer persistence
+
+    func test_stateTimer_persistsAcrossRestart_whenStateMatches() {
+        let past = Date(timeIntervalSince1970: 1000)
+        let stateStore = SpyStateStore(seed: ["w1": StateEntry(state: .working, enteredAt: past)])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])  // -> working
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess, chime: SpyChime(),
+            settings: Settings(orderMode: .alphabetical, muted: false), stateStore: stateStore)
+        store.refresh()
+        XCTAssertEqual(store.rows.first?.stateEnteredAt, past,
+                       "matching persisted state should keep the timer running across restart")
+    }
+
+    func test_stateTimer_resetsWhenPersistedStateMismatches() {
+        let past = Date(timeIntervalSince1970: 1000)
+        let stateStore = SpyStateStore(seed: ["w1": StateEntry(state: .idle, enteredAt: past)])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])  // -> working
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess, chime: SpyChime(),
+            settings: Settings(orderMode: .alphabetical, muted: false), stateStore: stateStore)
+        store.refresh()
+        let entered = try! XCTUnwrap(store.rows.first?.stateEnteredAt)
+        XCTAssertNotEqual(entered, past)
+        XCTAssertEqual(entered.timeIntervalSinceNow, 0, accuracy: 5,
+                       "mismatched persisted state should reset the timer to now")
+    }
+
+    func test_stateEntries_pruneVanishedWindows() {
+        let stateStore = SpyStateStore()
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess, chime: SpyChime(),
+            settings: Settings(orderMode: .alphabetical, muted: false), stateStore: stateStore)
+        store.refresh()
+        XCTAssertNotNil(stateStore.saved["w1"])
+        win.emit([])  // window closed
+        XCTAssertNil(stateStore.saved["w1"], "vanished window's entry should be pruned on save")
+        XCTAssertTrue(stateStore.saved.isEmpty)
     }
 
     // MARK: - compactRow
