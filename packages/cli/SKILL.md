@@ -126,12 +126,13 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command                                                                                                                                       |
 | `agent_command`       | `string`   | `"claude --permission-mode plan"` | Base command `wt agent` runs in Zed; any `--permission-mode` flag is replaced by the `--mode` option (defaults to `plan`), then `<plan_prompt>` is appended single-quoted |
 | `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
+| `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh                                             |
 | `repos`               | `string[]` | `[]`                              | Registered repo paths (auto-populated on first use)                                                                                                                       |
 | `repo_overrides`      | `object`   | `{}`                              | Per-repo config overrides (see below)                                                                                                                                     |
 
 ### Per-repo overrides
 
-Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_trigger_chord`) for a specific repo:
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_trigger_chord`, `auto_refresh_minutes`) for a specific repo:
 
 ```json
 {

@@ -12,6 +12,7 @@ export interface RepoConfig {
   ide_open_args: string[];
   agent_command: string;
   agent_trigger_chord: string;
+  auto_refresh_minutes: number;
 }
 
 export interface WtConfig extends RepoConfig {
@@ -28,6 +29,7 @@ export const DEFAULT_CONFIG: WtConfig = {
   ide_open_args: ['-n'],
   agent_command: 'claude --permission-mode plan',
   agent_trigger_chord: 'ctrl-shift-cmd-c',
+  auto_refresh_minutes: 5,
   repos: [],
   repo_overrides: {},
 };

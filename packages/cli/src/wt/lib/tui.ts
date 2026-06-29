@@ -33,6 +33,27 @@ function shortenPath(p: string): string {
   return home && p.startsWith(home) ? `~${p.slice(home.length)}` : p;
 }
 
+export function formatRefreshStatus(
+  lastRefresh: Date,
+  intervalMinutes: number,
+): string {
+  const time = lastRefresh.toLocaleTimeString();
+  return `⟳ Last refreshed ${time} · every ${intervalMinutes}m`;
+}
+
+export function reconcileSelectedIndex(
+  items: Worktree[],
+  prevPath: string | undefined,
+  prevIndex: number,
+): number {
+  if (items.length === 0) return 0;
+  if (prevPath) {
+    const found = items.findIndex((w) => w.path === prevPath);
+    if (found !== -1) return found;
+  }
+  return Math.min(Math.max(0, prevIndex), items.length - 1);
+}
+
 export interface ListLayout {
   /** Pinned top region (global-mode notice + search query line). */
   header: string[];
@@ -58,8 +79,14 @@ export function buildListLayout(
   selectedIndex: number,
   query: string,
   mode: 'repo' | 'global',
+  lastRefresh: Date | null = null,
+  intervalMinutes = 0,
 ): ListLayout {
   const header: string[] = [];
+  if (lastRefresh && intervalMinutes > 0) {
+    header.push(pc.dim(formatRefreshStatus(lastRefresh, intervalMinutes)));
+    header.push('');
+  }
   if (mode === 'global') {
     header.push(
       pc.dim('ℹ Not in a git repository — showing all registered worktrees'),
@@ -142,15 +169,34 @@ function fixedHeight(layout: ListLayout): number {
   return layout.header.length + layout.footer.length + 2;
 }
 
+/**
+ * Body viewport height for a `rows`-tall terminal. Leaves the terminal's last
+ * row unused: the long footer line wraps on narrow terminals (and some emulators
+ * under-report/reserve a row), and filling every row would then overflow by one
+ * and scroll the pinned top line (e.g. the auto-refresh header) out of view.
+ */
+function viewportHeight(layout: ListLayout, rows: number): number {
+  return Math.max(1, rows - fixedHeight(layout) - 1);
+}
+
 export function renderList(
   items: Worktree[],
   selectedIndex: number,
   query: string,
   mode: 'repo' | 'global',
   rows: number = process.stdout.rows ?? 24,
+  lastRefresh: Date | null = null,
+  intervalMinutes = 0,
 ): string {
-  const layout = buildListLayout(items, selectedIndex, query, mode);
-  const viewport = Math.max(1, rows - fixedHeight(layout));
+  const layout = buildListLayout(
+    items,
+    selectedIndex,
+    query,
+    mode,
+    lastRefresh,
+    intervalMinutes,
+  );
+  const viewport = viewportHeight(layout, rows);
   const span = layout.itemSpans[selectedIndex] ?? { start: 0, end: 0 };
   const offset = clampScroll(0, span, viewport, layout.body.length);
   return composeView(layout, offset, viewport);
@@ -370,20 +416,38 @@ export interface TuiHandlers {
   refreshItems: () => Promise<Worktree[]>;
 }
 
+export interface RunInteractiveListOptions {
+  /** Re-fetch + re-render every N minutes (uses `handlers.refreshItems`). 0 disables. */
+  autoRefreshMinutes?: number;
+}
+
 export async function runInteractiveList(
   allItems: Worktree[],
   mode: 'repo' | 'global',
   handlers: TuiHandlers,
+  options: RunInteractiveListOptions = {},
 ): Promise<void> {
+  const { autoRefreshMinutes = 0 } = options;
+  const refreshEnabled =
+    Number.isFinite(autoRefreshMinutes) && autoRefreshMinutes > 0;
+
   let query = '';
   let selectedIndex = 0;
   let scrollOffset = 0;
   let filtered = allItems;
+  let lastRefresh: Date | null = refreshEnabled ? new Date() : null;
 
   const render = () => {
     const rows = process.stdout.rows ?? 24;
-    const layout = buildListLayout(filtered, selectedIndex, query, mode);
-    const viewport = Math.max(1, rows - fixedHeight(layout));
+    const layout = buildListLayout(
+      filtered,
+      selectedIndex,
+      query,
+      mode,
+      lastRefresh,
+      autoRefreshMinutes,
+    );
+    const viewport = viewportHeight(layout, rows);
     const span = layout.itemSpans[selectedIndex] ?? { start: 0, end: 0 };
     scrollOffset = clampScroll(
       scrollOffset,
@@ -400,6 +464,9 @@ export async function runInteractiveList(
 
   return new Promise((resolve, reject) => {
     let listenerActive = false;
+    let interacting = false;
+    let refreshing = false;
+    let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
     const attachListener = () => {
       if (!listenerActive) {
@@ -415,9 +482,41 @@ export async function runInteractiveList(
       listenerActive = false;
     };
 
+    const stopRefresh = () => {
+      if (refreshTimer !== null) {
+        clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+    };
+
+    // Auto-refresh: re-query worktrees on a timer, preserving the active filter
+    // and the selected worktree (by path). Skipped while a delete/create/agent
+    // prompt is on screen (raw mode off) and never overlaps itself.
+    const tick = async () => {
+      if (interacting || refreshing) return;
+      refreshing = true;
+      try {
+        const prevPath = filtered[selectedIndex]?.path;
+        allItems = await handlers.refreshItems();
+        filtered = filterItems(allItems, query);
+        selectedIndex = reconcileSelectedIndex(
+          filtered,
+          prevPath,
+          selectedIndex,
+        );
+        lastRefresh = new Date();
+        if (!interacting) render();
+      } catch {
+        // keep current data on refresh failure
+      } finally {
+        refreshing = false;
+      }
+    };
+
     const onData = async (key: string) => {
       try {
         if (key === '\x03' || key === 'q' || key === 'Q' || key === '\x1b') {
+          stopRefresh();
           detachListener();
           cleanupRawMode();
           resolve();
@@ -430,6 +529,7 @@ export async function runInteractiveList(
         } else if (key === '\r') {
           const item = filtered[selectedIndex];
           if (item) {
+            stopRefresh();
             detachListener();
             cleanupRawMode();
             handlers.onOpen(item);
@@ -444,6 +544,7 @@ export async function runInteractiveList(
               );
               return;
             }
+            interacting = true;
             detachListener();
             cleanupRawMode();
             const confirmed = await handlers.onDelete(item);
@@ -457,9 +558,11 @@ export async function runInteractiveList(
             );
             setupRawMode();
             attachListener();
+            interacting = false;
             render();
           }
         } else if (key === 'c' || key === 'C') {
+          interacting = true;
           detachListener();
           cleanupRawMode();
           await handlers.onCreate();
@@ -469,10 +572,13 @@ export async function runInteractiveList(
             selectedIndex,
             Math.max(0, filtered.length - 1),
           );
+          lastRefresh = refreshEnabled ? new Date() : lastRefresh;
           setupRawMode();
           attachListener();
+          interacting = false;
           render();
         } else if (key === 'a' || key === 'A') {
+          interacting = true;
           detachListener();
           cleanupRawMode();
           await handlers.onAgent();
@@ -482,8 +588,10 @@ export async function runInteractiveList(
             selectedIndex,
             Math.max(0, filtered.length - 1),
           );
+          lastRefresh = refreshEnabled ? new Date() : lastRefresh;
           setupRawMode();
           attachListener();
+          interacting = false;
           render();
         } else if (key === '\x7f') {
           query = query.slice(0, -1);
@@ -499,6 +607,7 @@ export async function runInteractiveList(
           render();
         }
       } catch (err) {
+        stopRefresh();
         detachListener();
         cleanupRawMode();
         reject(err);
@@ -506,5 +615,9 @@ export async function runInteractiveList(
     };
 
     attachListener();
+
+    if (refreshEnabled) {
+      refreshTimer = setInterval(tick, autoRefreshMinutes * 60_000);
+    }
   });
 }

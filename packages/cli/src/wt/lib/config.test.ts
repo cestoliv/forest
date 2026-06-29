@@ -75,6 +75,19 @@ describe('getEffectiveConfig', () => {
     const config = getEffectiveConfig('/no/override', store);
     expect(config.ide).toBe('zed');
     expect(config.setup_commands).toEqual([]);
+    expect(config.auto_refresh_minutes).toBe(5);
+  });
+
+  it('honours a per-repo auto_refresh_minutes override', () => {
+    const store = createStore(tmpDir);
+    setGlobalConfig(
+      { repo_overrides: { '/my/repo': { auto_refresh_minutes: 1 } } },
+      store,
+    );
+    expect(getEffectiveConfig('/my/repo', store).auto_refresh_minutes).toBe(1);
+    expect(getEffectiveConfig('/other/repo', store).auto_refresh_minutes).toBe(
+      5,
+    );
   });
 
   it('overrides global fields with repo-specific values', () => {

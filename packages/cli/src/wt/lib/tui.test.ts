@@ -5,7 +5,9 @@ import {
   buildListLayout,
   clampScroll,
   filterItems,
+  formatRefreshStatus,
   groupByRepo,
+  reconcileSelectedIndex,
   renderBranchInput,
   renderList,
   renderRepoPicker,
@@ -200,6 +202,53 @@ describe('buildListLayout', () => {
     const { itemSpans } = buildListLayout(withCommit, 0, '', 'repo');
     expect(itemSpans[0].end).toBe(itemSpans[0].start + 1);
   });
+
+  it('shows a last-refresh header when a refresh time and interval are given', () => {
+    const at = new Date(2026, 0, 1, 14, 32, 5);
+    const { header } = buildListLayout(items, 0, '', 'repo', at, 5);
+    const text = header.join('\n');
+    expect(text).toContain('Last refreshed');
+    expect(text).toContain('every 5m');
+  });
+
+  it('omits the refresh header without a refresh time', () => {
+    const { header } = buildListLayout(items, 0, '', 'repo');
+    expect(header.join('\n')).not.toContain('Last refreshed');
+  });
+
+  it('omits the refresh header when the interval is 0', () => {
+    const at = new Date(2026, 0, 1, 14, 32, 5);
+    const { header } = buildListLayout(items, 0, '', 'repo', at, 0);
+    expect(header.join('\n')).not.toContain('Last refreshed');
+  });
+});
+
+describe('formatRefreshStatus', () => {
+  it('includes the formatted time and interval', () => {
+    const at = new Date(2026, 0, 1, 14, 32, 5);
+    const status = formatRefreshStatus(at, 5);
+    expect(status).toContain(at.toLocaleTimeString());
+    expect(status).toContain('every 5m');
+  });
+});
+
+describe('reconcileSelectedIndex', () => {
+  it('returns 0 for an empty list', () => {
+    expect(reconcileSelectedIndex([], '/projects/repo', 3)).toBe(0);
+  });
+
+  it('relocates the selection to the matching path', () => {
+    expect(reconcileSelectedIndex(items, '/projects/other', 0)).toBe(2);
+  });
+
+  it('clamps to the last index when the path is gone', () => {
+    expect(reconcileSelectedIndex(items, '/projects/removed', 9)).toBe(2);
+  });
+
+  it('clamps the previous index when no path is given', () => {
+    expect(reconcileSelectedIndex(items, undefined, 9)).toBe(2);
+    expect(reconcileSelectedIndex(items, undefined, 1)).toBe(1);
+  });
 });
 
 describe('clampScroll', () => {
@@ -238,6 +287,11 @@ describe('renderList viewport', () => {
     expect(lineCount).toBeLessThanOrEqual(10);
   });
 
+  it("leaves the terminal's last row free so a wrapped footer can't scroll the top off", () => {
+    const lineCount = renderList(many, 0, '', 'repo', 10).split('\n').length;
+    expect(lineCount).toBeLessThanOrEqual(9);
+  });
+
   it('always keeps the search line and footer visible', () => {
     const output = renderList(many, 0, '', 'repo', 10);
     expect(output).toContain('> _');
@@ -261,9 +315,9 @@ describe('renderList viewport', () => {
     expect(output).not.toContain('↓ more');
   });
 
-  it('pins the footer to the bottom when content is shorter than the terminal', () => {
+  it('pins the footer near the bottom (last row reserved) when content is shorter than the terminal', () => {
     const lines = renderList(items, 0, '', 'repo', 20).split('\n');
-    expect(lines).toHaveLength(20);
+    expect(lines).toHaveLength(19);
     expect(lines[lines.length - 1]).toContain('↕ navigate');
   });
 });
