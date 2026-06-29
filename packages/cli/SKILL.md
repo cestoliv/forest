@@ -18,6 +18,7 @@ Launch the interactive TUI. Shows worktrees for the current repo (repo mode) or 
 - Arrow keys — navigate
 - `Enter` — open worktree in IDE (exits the TUI)
 - `D` — delete worktree
+- `P` — prune all merged worktrees (per-branch confirmation)
 - `C` — create a new worktree (works in both repo and global mode)
 - `A` — create a worktree and start an AI agent in it (works in both modes)
 - type to search · `Backspace` — edit search
@@ -38,8 +39,8 @@ After a create or agent action the TUI **refreshes and stays open** on the list
 (your search and cursor are preserved) rather than exiting — only `Enter` (open)
 and `Q`/`Esc` exit.
 
-Because `a`/`A`, `c`/`C`, and `d`/`D` are reserved as command keys, those
-letters can't be typed into the search box.
+Because `a`/`A`, `c`/`C`, `d`/`D`, and `p`/`P` are reserved as command keys,
+those letters can't be typed into the search box.
 
 ### `wt create [branch]`
 
@@ -96,6 +97,25 @@ message.
 If the worktree path already exists, `wt agent` prompts you to **open it in the
 IDE**, **open it and start the agent**, or **quit** — instead of erroring. (In a
 non-interactive shell it errors with a non-zero exit instead of prompting.)
+
+### `wt prune`
+
+Remove every worktree whose branch has already been merged into the base
+branch (`base_branch`, default `origin/main`). Each candidate is confirmed
+individually — and force-confirmed when git refuses (submodules / uncommitted
+changes), exactly like a manual `d` delete. The branch itself is left intact;
+only the worktree is removed.
+
+```bash
+wt prune   # review and remove merged worktrees, one prompt per branch
+```
+
+Merge detection is patch-id based (via `git cherry`), so a single-commit branch
+that was **squash-merged** through a PR is still recognized as merged. It also
+best-effort fetches the remote first so detection sees up-to-date refs; if the
+base ref can't be resolved (e.g. offline), nothing is removed. Works in repo
+mode (current repo) and global mode (all registered repos, each against its own
+`base_branch`). The TUI exposes the same action under the `p` key.
 
 ### `wt config`
 

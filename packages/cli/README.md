@@ -38,6 +38,7 @@ wt                                        # Browse worktrees (interactive TUI)
 wt create my-feat                         # New worktree, opens your IDE
 wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macOS)
 wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of plan
+wt prune                                  # Remove merged worktrees (per-branch confirm)
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
 ```
@@ -90,7 +91,7 @@ MY-PROJECT
     feat/dashboard  ~/dev/my-project-feat-dashboard
       wip: add chart component (1d ago)
 
-↕ navigate · Enter open · D delete · C create · A agent · Q quit
+↕ navigate · Enter open · D delete · P prune · C create · A agent · Q quit
 ```
 
 Type to fuzzy-filter branches instantly. Inside a repo it shows that repo's
@@ -104,8 +105,9 @@ and a permission mode — **worktree (repo → branch) → plan prompt → permi
 mode**. Pressing `Esc` steps back to the previous question (answers preserved),
 or back to the list from the first step. After creating, the list **refreshes
 and stays open** (preserving your search and cursor) instead of exiting — only
-`Enter` and `Q`/`Esc` leave the TUI. Note that `a`/`c`/`d` are command keys, so
-they can't be typed into the search box.
+`Enter` and `Q`/`Esc` leave the TUI. `P` prunes every worktree whose branch has
+already been merged (see [`wt prune`](#prune--wt-prune) below). Note that
+`a`/`c`/`d`/`p` are command keys, so they can't be typed into the search box.
 
 ## Create — `wt create [branch]`
 
@@ -120,6 +122,26 @@ registered repos.
 
 If the path already exists, `wt create` offers to open it in your IDE instead of
 erroring (in a non-interactive shell it exits non-zero).
+
+## Prune — `wt prune`
+
+```bash
+wt prune   # remove every merged worktree, one confirmation per branch
+```
+
+Cleans up the worktrees you're done with: it finds every worktree whose branch
+has already been merged into the base branch (`base_branch`, default
+`origin/main`) and removes it — **always confirming each branch individually**,
+and force-confirming when git refuses (submodules or uncommitted changes), just
+like a manual `D` delete. The branch itself stays; only the worktree is removed.
+Your `teardown_commands` run before each removal.
+
+Merge detection is patch-id based (via `git cherry`), so a single-commit branch
+**squash-merged** through a PR is still detected. `wt prune` best-effort fetches
+the remote first; if the base ref can't be resolved (offline, missing), it
+removes nothing. The TUI exposes the same action under the `P` key. Works in
+repo mode and across all registered repos in global mode (each against its own
+`base_branch`).
 
 ## Configuration
 

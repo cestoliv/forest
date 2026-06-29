@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
-import { prepareListItems } from './list.js';
+import type { Worktree } from '../lib/git.js';
+import { prepareListItems, selectWipeCandidates } from './list.js';
 
 let tmpDir: string;
 let repoDir: string;
@@ -76,5 +77,52 @@ describe('prepareListItems', () => {
     setGlobalConfig({ repos: [repoDir] }, store);
     const result = await prepareListItems({ cwd: tmpDir, store });
     expect(result.items.every((w) => !w.isCurrent)).toBe(true);
+  });
+});
+
+describe('selectWipeCandidates', () => {
+  const wt = (over: Partial<Worktree>): Worktree => ({
+    path: '/r/wt',
+    branch: 'feature',
+    isCurrent: false,
+    repoRoot: '/r',
+    ...over,
+  });
+  const allMerged = () => true;
+
+  it('includes a merged linked worktree', () => {
+    const items = [wt({ path: '/r/feature', branch: 'feature' })];
+    expect(selectWipeCandidates(items, allMerged)).toEqual(items);
+  });
+
+  it('excludes the current worktree', () => {
+    const items = [wt({ isCurrent: true })];
+    expect(selectWipeCandidates(items, allMerged)).toEqual([]);
+  });
+
+  it('excludes the main worktree (path === repoRoot)', () => {
+    const items = [wt({ path: '/r', repoRoot: '/r' })];
+    expect(selectWipeCandidates(items, allMerged)).toEqual([]);
+  });
+
+  it('excludes detached-HEAD worktrees', () => {
+    const items = [wt({ branch: '(detached)' })];
+    expect(selectWipeCandidates(items, allMerged)).toEqual([]);
+  });
+
+  it('excludes worktrees the predicate reports as not merged', () => {
+    const items = [wt({ branch: 'feature' })];
+    expect(selectWipeCandidates(items, () => false)).toEqual([]);
+  });
+
+  it('keeps only merged worktrees from a mixed list', () => {
+    const merged = wt({ path: '/r/merged', branch: 'merged' });
+    const unmerged = wt({ path: '/r/unmerged', branch: 'unmerged' });
+    const main = wt({ path: '/r', repoRoot: '/r', branch: 'main' });
+    const result = selectWipeCandidates(
+      [merged, unmerged, main],
+      (w) => w.branch === 'merged' || w.branch === 'main',
+    );
+    expect(result).toEqual([merged]);
   });
 });

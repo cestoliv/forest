@@ -118,7 +118,9 @@ export function buildListLayout(
   }
 
   const footer = [
-    pc.dim('↕ navigate · Enter open · D delete · C create · A agent · Q quit'),
+    pc.dim(
+      '↕ navigate · Enter open · D delete · P prune · C create · A agent · Q quit',
+    ),
   ];
 
   return { header, body, footer, itemSpans };
@@ -212,6 +214,22 @@ function cleanupRawMode(): void {
   process.stdin.setRawMode(false);
   process.stdin.pause();
   process.stdout.write('\x1B[2J\x1B[H');
+}
+
+/**
+ * Block until the user presses a key. Used to hold transient output on screen
+ * (e.g. a "nothing to do" message) before the list re-renders and clears it.
+ */
+function waitForKeypress(): Promise<void> {
+  return new Promise((resolve) => {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.once('data', () => {
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      resolve();
+    });
+  });
 }
 
 export function renderRepoPicker(
@@ -412,6 +430,8 @@ export interface TuiHandlers {
   onDelete: (item: Worktree) => Promise<boolean>;
   onCreate: () => Promise<void>;
   onAgent: () => Promise<void>;
+  /** Remove all merged worktrees among the given items; returns the removed ones. */
+  onWipe: (items: Worktree[]) => Promise<Worktree[]>;
   /** Re-query worktrees after a create/agent so the list reflects the change. */
   refreshItems: () => Promise<Worktree[]>;
 }
@@ -561,6 +581,32 @@ export async function runInteractiveList(
             interacting = false;
             render();
           }
+        } else if (key === 'p' || key === 'P') {
+          interacting = true;
+          detachListener();
+          cleanupRawMode();
+          // Operate on the full set, not the search-filtered view, so a search
+          // can't silently narrow what gets pruned.
+          const removed = await handlers.onWipe(allItems);
+          if (removed.length > 0) {
+            const removedSet = new Set(removed);
+            allItems = allItems.filter((w) => !removedSet.has(w));
+            filtered = filtered.filter((w) => !removedSet.has(w));
+          } else {
+            // Nothing was pruned — `onWipe` printed its result (e.g. "No merged
+            // worktrees to wipe."). Hold it on screen until a keypress so the
+            // immediate re-render below doesn't erase it without any feedback.
+            process.stdout.write(pc.dim('\nPress any key to continue…'));
+            await waitForKeypress();
+          }
+          selectedIndex = Math.min(
+            selectedIndex,
+            Math.max(0, filtered.length - 1),
+          );
+          setupRawMode();
+          attachListener();
+          interacting = false;
+          render();
         } else if (key === 'c' || key === 'C') {
           interacting = true;
           detachListener();

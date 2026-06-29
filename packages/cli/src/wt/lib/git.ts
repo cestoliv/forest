@@ -174,6 +174,42 @@ export function branchExists(repoRoot: string, branch: string): boolean {
   }
 }
 
+/**
+ * Whether `branch` has been merged into `baseBranch`, detected by patch id via
+ * `git cherry <base> <branch>`: the branch must have at least one commit and
+ * every one of them must already have a patch-equivalent in base. This catches
+ * a single-commit branch that was squash- or rebase-merged via a PR — the
+ * commit that landed on base is a different object, so the branch tip is not an
+ * ancestor of base, but its diff matches.
+ *
+ * A branch with no commits of its own (e.g. a freshly-created worktree that
+ * still points at base) produces no `git cherry` output and is reported as NOT
+ * merged, so brand-new worktrees are never offered for pruning. Plain
+ * merge-commit / fast-forward merges — where the branch's commits live verbatim
+ * in base — are intentionally not detected, matching the patch-id-based design.
+ * Fails closed: any error (missing base ref, offline, unknown branch) → false,
+ * so callers never wipe on uncertainty.
+ */
+export function isBranchMerged(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+): boolean {
+  try {
+    // `git cherry <upstream=base> <head=branch>`: '+' = commit only on the
+    // branch (unmerged), '-' = a patch-equivalent exists in base.
+    const out = execFileSync('git', ['cherry', baseBranch, branch], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const lines = out.split('\n').filter((l) => l.trim().length > 0);
+    return lines.length > 0 && lines.every((l) => l.startsWith('-'));
+  } catch {
+    return false;
+  }
+}
+
 export function setUpstreamTracking(
   worktreePath: string,
   branch: string,

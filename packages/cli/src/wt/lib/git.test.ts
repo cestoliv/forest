@@ -16,6 +16,7 @@ import {
   branchExists,
   fetchRemote,
   getRepoRoot,
+  isBranchMerged,
   listWorktreeDirtyFiles,
   listWorktrees,
   parseWorktreeList,
@@ -329,5 +330,73 @@ describe('setUpstreamTracking', () => {
     expect(() =>
       setUpstreamTracking(wtPath, 'brand-new', 'origin'),
     ).not.toThrow();
+  });
+});
+
+describe('isBranchMerged', () => {
+  // git init may default to 'master' or 'main' depending on the host config.
+  const base = (): string =>
+    execSync('git branch --show-current', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    }).trim();
+
+  it('returns true for a single-commit branch that was squash-merged', () => {
+    const b = base();
+    execSync('git checkout -b squashed', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 's.txt'), 'squash content');
+    execSync('git add . && git commit -m "squash work"', { cwd: repoDir });
+    execSync(`git checkout ${b}`, { cwd: repoDir });
+    // Squash merge: the branch's diff lands on base as a brand-new commit, so
+    // the branch tip is NOT an ancestor — only the patch-id (git cherry) check
+    // can detect this.
+    execSync('git merge --squash squashed', { cwd: repoDir });
+    execSync('git commit -m "squash work (squashed)"', { cwd: repoDir });
+
+    expect(isBranchMerged(repoDir, 'squashed', b)).toBe(true);
+  });
+
+  it('returns true for a branch whose commit was rebased/cherry-picked onto base', () => {
+    const b = base();
+    execSync('git checkout -b rebased', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'r.txt'), 'rebased content');
+    execSync('git add . && git commit -m "rebased work"', { cwd: repoDir });
+    const sha = execSync('git rev-parse HEAD', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    }).trim();
+    execSync(`git checkout ${b}`, { cwd: repoDir });
+    // Advance base first so replaying the branch's patch lands on a different
+    // parent — a new sha with the same patch id (a genuine rebase-merge), not a
+    // fast-forward that would reuse the original commit verbatim.
+    writeFileSync(path.join(repoDir, 'base.txt'), 'base moved on');
+    execSync('git add . && git commit -m "base advances"', { cwd: repoDir });
+    execSync(`git cherry-pick ${sha}`, { cwd: repoDir });
+
+    expect(isBranchMerged(repoDir, 'rebased', b)).toBe(true);
+  });
+
+  it('returns false for a brand-new branch with no commits of its own', () => {
+    const b = base();
+    // A freshly-created worktree branch points at base and has done no work; it
+    // must not be reported as merged (otherwise prune would offer to delete it).
+    execSync('git branch fresh', { cwd: repoDir });
+
+    expect(isBranchMerged(repoDir, 'fresh', b)).toBe(false);
+  });
+
+  it('returns false for a branch with commits not on base', () => {
+    const b = base();
+    execSync('git checkout -b unmerged', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'u.txt'), 'unmerged');
+    execSync('git add . && git commit -m "unmerged work"', { cwd: repoDir });
+
+    expect(isBranchMerged(repoDir, 'unmerged', b)).toBe(false);
+  });
+
+  it('returns false (no throw) when the base ref does not exist', () => {
+    expect(isBranchMerged(repoDir, base(), 'origin/does-not-exist')).toBe(
+      false,
+    );
   });
 });

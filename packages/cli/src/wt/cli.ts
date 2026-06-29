@@ -35,6 +35,16 @@ program
   );
 
 program
+  .command('prune')
+  .description(
+    'Remove worktrees whose branch has been merged into the base branch',
+  )
+  .action(async () => {
+    const { runPrune } = await import('./commands/prune.js');
+    await runPrune();
+  });
+
+program
   .command('config')
   .description('Open the config file in $EDITOR')
   .option('--path', 'Print the config file path and exit')
