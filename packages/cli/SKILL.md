@@ -15,12 +15,31 @@ Launch the interactive TUI. Shows worktrees for the current repo (repo mode) or 
 
 **Keybindings in the TUI:**
 
-- Arrow keys / `j`/`k` — navigate
-- `Enter` — open worktree in IDE
-- `d` — delete worktree
-- `c` — create new worktree (repo mode only)
-- `/` — search
-- `q` / `Esc` — quit
+- Arrow keys — navigate
+- `Enter` — open worktree in IDE (exits the TUI)
+- `D` — delete worktree
+- `C` — create a new worktree (works in both repo and global mode)
+- `A` — create a worktree and start an AI agent in it (works in both modes)
+- type to search · `Backspace` — edit search
+- `Q` / `Esc` — quit
+
+`C` and `A` are step-by-step wizards. In global mode (run from outside a repo /
+"home") they start by prompting for the repo (picker), then the branch; in repo
+mode the repo is fixed so they start at the branch. `A` then adds two more
+steps:
+
+- `C` — **worktree (repo → branch)**
+- `A` — **worktree (repo → branch) → plan prompt → permission mode**
+
+Pressing `Esc` at any step goes back to the previous step (your earlier answers
+are preserved); pressing `Esc` on the first step returns to the list.
+
+After a create or agent action the TUI **refreshes and stays open** on the list
+(your search and cursor are preserved) rather than exiting — only `Enter` (open)
+and `Q`/`Esc` exit.
+
+Because `a`/`A`, `c`/`C`, and `d`/`D` are reserved as command keys, those
+letters can't be typed into the search box.
 
 ### `wt create [branch]`
 

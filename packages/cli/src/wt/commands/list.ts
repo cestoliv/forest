@@ -17,7 +17,53 @@ import {
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
-import { runInteractiveList } from '../lib/tui.js';
+import {
+  runBranchInput,
+  runInteractiveList,
+  runRepoPicker,
+  runWizard,
+} from '../lib/tui.js';
+
+/** Shared wizard state for the create/agent flows. */
+interface WorktreeTarget {
+  pickedRepo?: string;
+  branch?: string;
+}
+
+/**
+ * Build the leading wizard steps shared by create and agent: pick the repo
+ * (global mode only) then enter the branch. Both write into `state`, and each
+ * step preserves its prior answer so back-navigation doesn't lose input.
+ */
+function buildWorktreeSteps(
+  repoRoot: string | null,
+  store: ConfigStore,
+  state: WorktreeTarget,
+): Array<() => Promise<boolean>> {
+  const steps: Array<() => Promise<boolean>> = [];
+
+  if (!repoRoot) {
+    const repos = getRegisteredRepos(store);
+    steps.push(async () => {
+      const picked = await runRepoPicker(repos, state.pickedRepo);
+      if (!picked) return false;
+      state.pickedRepo = picked;
+      return true;
+    });
+  }
+
+  steps.push(async () => {
+    const entered = await runBranchInput(
+      state.pickedRepo as string,
+      state.branch ?? '',
+    );
+    if (!entered) return false;
+    state.branch = entered;
+    return true;
+  });
+
+  return steps;
+}
 
 export interface ListItems {
   items: Worktree[];
@@ -145,10 +191,70 @@ export async function runList(
     },
 
     onCreate: async () => {
-      if (repoRoot) {
-        const { createWorktree } = await import('./create.js');
-        await createWorktree(undefined, { cwd: repoRoot, store });
-      }
+      // Wizard: worktree (repo → branch). Esc steps back (repo picker) and
+      // drops to the list from the first step; preserved input avoids re-typing.
+      const state: WorktreeTarget = { pickedRepo: repoRoot ?? undefined };
+      const steps = buildWorktreeSteps(repoRoot, store, state);
+
+      if (!(await runWizard(steps))) return; // cancelled out → back to the list
+      if (state.pickedRepo === undefined || state.branch === undefined) return;
+
+      const { createWorktree } = await import('./create.js');
+      await createWorktree(state.branch, { cwd: state.pickedRepo, store });
+    },
+
+    onAgent: async () => {
+      const { createAgentWorktree, VALID_MODES } = await import('./agent.js');
+
+      // Wizard: worktree (repo → branch) → plan prompt → permission mode. Esc
+      // steps back one (and to the list from the first step). Entered values
+      // are preserved so going back and forward doesn't lose work.
+      const state: WorktreeTarget & { plan?: string; mode: string } = {
+        pickedRepo: repoRoot ?? undefined,
+        mode: 'plan',
+      };
+      const steps = buildWorktreeSteps(repoRoot, store, state);
+
+      steps.push(async () => {
+        const entered = await clack.text({
+          message: 'Plan prompt for the agent:',
+          initialValue: state.plan,
+          validate: (v) => (!v || v.length === 0 ? 'Required' : undefined),
+        });
+        if (clack.isCancel(entered)) return false;
+        state.plan = entered;
+        return true;
+      });
+
+      steps.push(async () => {
+        const chosen = await clack.select({
+          message: 'Permission mode:',
+          initialValue: state.mode,
+          options: VALID_MODES.map((m) => ({ value: String(m), label: m })),
+        });
+        if (clack.isCancel(chosen)) return false;
+        state.mode = chosen;
+        return true;
+      });
+
+      if (!(await runWizard(steps))) return; // cancelled out → back to the list
+      if (
+        state.pickedRepo === undefined ||
+        state.branch === undefined ||
+        state.plan === undefined
+      )
+        return;
+
+      await createAgentWorktree(state.branch, state.plan, {
+        cwd: state.pickedRepo,
+        store,
+        mode: state.mode,
+      });
+    },
+
+    refreshItems: async () => {
+      const refreshed = await prepareListItems({ cwd, store });
+      return refreshed.items;
     },
   });
 }

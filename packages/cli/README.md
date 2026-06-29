@@ -90,12 +90,22 @@ MY-PROJECT
     feat/dashboard  ~/dev/my-project-feat-dashboard
       wip: add chart component (1d ago)
 
-↕ navigate · Enter open · D delete · C create · Q quit
+↕ navigate · Enter open · D delete · C create · A agent · Q quit
 ```
 
 Type to fuzzy-filter branches instantly. Inside a repo it shows that repo's
-worktrees (and `C` creates one); run it outside any repo to browse worktrees
-across all registered repos.
+worktrees; run it outside any repo ("home") to browse worktrees across all
+registered repos.
+
+`C` creates a worktree and `A` creates one and starts an AI agent in it — both
+work from anywhere and are step-by-step wizards. Run from home and they first
+prompt for the repo, then the branch (`C` stops there); `A` adds a plan prompt
+and a permission mode — **worktree (repo → branch) → plan prompt → permission
+mode**. Pressing `Esc` steps back to the previous question (answers preserved),
+or back to the list from the first step. After creating, the list **refreshes
+and stays open** (preserving your search and cursor) instead of exiting — only
+`Enter` and `Q`/`Esc` leave the TUI. Note that `a`/`c`/`d` are command keys, so
+they can't be typed into the search box.
 
 ## Create — `wt create [branch]`
 

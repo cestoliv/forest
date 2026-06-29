@@ -21,7 +21,7 @@ import {
 } from './create.js';
 
 /** Valid Claude Code permission modes */
-const VALID_MODES = [
+export const VALID_MODES = [
   'default',
   'acceptEdits',
   'plan',
@@ -48,7 +48,7 @@ const delay = (ms: number): Promise<void> =>
  * or quit. The agent start itself lives in `startAgentInWorktree`. macOS/Zed-specific.
  */
 export async function createAgentWorktree(
-  branch: string,
+  branch: string | undefined,
   planPrompt: string,
   options: CreateOptions = {},
 ): Promise<void> {

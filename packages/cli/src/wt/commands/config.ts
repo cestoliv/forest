@@ -1,5 +1,5 @@
 // src/commands/config.ts
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { getConfigFilePath } from '../lib/config.js';
 
 export function printConfigPath(cwd?: string): void {
@@ -7,7 +7,7 @@ export function printConfigPath(cwd?: string): void {
   console.log(configPath);
 }
 
-export function openConfig(cwd?: string): void {
+export function openConfig(cwd?: string): ChildProcess {
   const configPath = getConfigFilePath(cwd);
   console.log(`Config: ${configPath}`);
   const editor = process.env.EDITOR ?? 'nano';
@@ -17,4 +17,5 @@ export function openConfig(cwd?: string): void {
     process.exit(1);
   });
   child.on('close', (code) => process.exit(code ?? 0));
+  return child;
 }

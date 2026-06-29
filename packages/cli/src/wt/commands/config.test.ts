@@ -60,14 +60,12 @@ describe('openConfig', () => {
         .spyOn(process, 'exit')
         .mockImplementation(() => undefined as never);
 
-      openConfig(tmpDir);
+      const child = openConfig(tmpDir);
 
-      await new Promise<void>((resolve) => {
-        setTimeout(() => {
-          expect(exitSpy).toHaveBeenCalledWith(0);
-          resolve();
-        }, 200);
-      });
+      // Wait for the real editor process to exit rather than a fixed timer,
+      // which races under load and hangs the test until the suite timeout.
+      await new Promise<void>((resolve) => child.on('close', () => resolve()));
+      expect(exitSpy).toHaveBeenCalledWith(0);
     } finally {
       process.env.EDITOR = originalEditor;
     }
@@ -100,16 +98,12 @@ describe('openConfig without valid config', () => {
         .spyOn(process, 'exit')
         .mockImplementation(() => undefined as never);
 
-      openConfig(tmpDir);
+      const child = openConfig(tmpDir);
 
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(tmpDir));
 
-      await new Promise<void>((resolve) => {
-        setTimeout(() => {
-          expect(exitSpy).toHaveBeenCalledWith(0);
-          resolve();
-        }, 200);
-      });
+      await new Promise<void>((resolve) => child.on('close', () => resolve()));
+      expect(exitSpy).toHaveBeenCalledWith(0);
     } finally {
       process.env.EDITOR = originalEditor;
     }

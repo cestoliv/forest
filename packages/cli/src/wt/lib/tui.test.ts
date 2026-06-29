@@ -9,6 +9,7 @@ import {
   renderBranchInput,
   renderList,
   renderRepoPicker,
+  runWizard,
 } from './tui.js';
 
 const items: Worktree[] = [
@@ -95,12 +96,14 @@ describe('renderList', () => {
     expect(globalOutput).toContain('Not in a git repository');
   });
 
-  it('shows C create hint in repo mode but not global mode', () => {
+  it('shows C create and A agent hints in both repo and global mode', () => {
     const repoOutput = renderList(items, 0, '', 'repo');
     expect(repoOutput).toContain('C create');
+    expect(repoOutput).toContain('A agent');
 
     const globalOutput = renderList(items, 0, '', 'global');
-    expect(globalOutput).not.toContain('C create');
+    expect(globalOutput).toContain('C create');
+    expect(globalOutput).toContain('A agent');
   });
 
   it('shows repo section headers in both modes', () => {
@@ -160,10 +163,12 @@ describe('buildListLayout', () => {
     expect(repo.header.join('\n')).toContain('> _');
     expect(repo.footer.join('\n')).toContain('↕ navigate');
     expect(repo.footer.join('\n')).toContain('C create');
+    expect(repo.footer.join('\n')).toContain('A agent');
 
     const global = buildListLayout(items, 0, '', 'global');
     expect(global.header.join('\n')).toContain('Not in a git repository');
-    expect(global.footer.join('\n')).not.toContain('C create');
+    expect(global.footer.join('\n')).toContain('C create');
+    expect(global.footer.join('\n')).toContain('A agent');
   });
 
   it('puts repo group headers and items in the body', () => {
@@ -332,5 +337,62 @@ describe('renderBranchInput', () => {
     const output = renderBranchInput('my-repo', '');
     expect(output).toContain('Enter confirm');
     expect(output).toContain('Esc cancel');
+  });
+});
+
+describe('runWizard', () => {
+  it('advances through every step and resolves true', async () => {
+    const calls: number[] = [];
+    const steps = [0, 1, 2].map((n) => async () => {
+      calls.push(n);
+      return true;
+    });
+    expect(await runWizard(steps)).toBe(true);
+    expect(calls).toEqual([0, 1, 2]);
+  });
+
+  it('resolves false when the first step cancels', async () => {
+    const calls: string[] = [];
+    const steps = [
+      async () => {
+        calls.push('a');
+        return false;
+      },
+      async () => {
+        calls.push('b');
+        return true;
+      },
+    ];
+    expect(await runWizard(steps)).toBe(false);
+    expect(calls).toEqual(['a']); // never reaches step b
+  });
+
+  it('steps back to the previous step on cancel, then continues', async () => {
+    const calls: string[] = [];
+    let firstTry = true;
+    const steps = [
+      async () => {
+        calls.push('a');
+        return true;
+      },
+      async () => {
+        calls.push('b');
+        if (firstTry) {
+          firstTry = false;
+          return false; // go back to step a once
+        }
+        return true;
+      },
+      async () => {
+        calls.push('c');
+        return true;
+      },
+    ];
+    expect(await runWizard(steps)).toBe(true);
+    expect(calls).toEqual(['a', 'b', 'a', 'b', 'c']);
+  });
+
+  it('resolves true for an empty step list', async () => {
+    expect(await runWizard([])).toBe(true);
   });
 });

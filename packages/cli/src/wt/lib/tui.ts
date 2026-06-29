@@ -90,9 +90,8 @@ export function buildListLayout(
     }
   }
 
-  const createHint = mode === 'repo' ? ' · C create' : '';
   const footer = [
-    pc.dim(`↕ navigate · Enter open · D delete${createHint} · Q quit`),
+    pc.dim('↕ navigate · Enter open · D delete · C create · A agent · Q quit'),
   ];
 
   return { header, body, footer, itemSpans };
@@ -190,7 +189,10 @@ export function renderRepoPicker(
   return lines.join('\n');
 }
 
-export async function runRepoPicker(repos: string[]): Promise<string | null> {
+export async function runRepoPicker(
+  repos: string[],
+  initialRepo?: string,
+): Promise<string | null> {
   const filterRepos = (all: string[], q: string): string[] =>
     q
       ? all.filter((p) =>
@@ -199,7 +201,7 @@ export async function runRepoPicker(repos: string[]): Promise<string | null> {
       : all;
 
   let query = '';
-  let selectedIndex = 0;
+  let selectedIndex = initialRepo ? Math.max(0, repos.indexOf(initialRepo)) : 0;
   let filtered = repos;
 
   const render = () => {
@@ -284,8 +286,11 @@ export function renderBranchInput(
   return lines.join('\n');
 }
 
-export async function runBranchInput(repoRoot: string): Promise<string | null> {
-  let branch = '';
+export async function runBranchInput(
+  repoRoot: string,
+  initial = '',
+): Promise<string | null> {
+  let branch = initial;
   let error: string | undefined;
   const repoName = path.basename(repoRoot);
 
@@ -332,12 +337,37 @@ export async function runBranchInput(repoRoot: string): Promise<string | null> {
   });
 }
 
+/**
+ * Run an ordered list of wizard steps with back-navigation. Each step resolves
+ * `true` to advance to the next step or `false` to go back one step (e.g. the
+ * user pressed Esc). Cancelling the first step resolves the whole wizard to
+ * `false` so the caller can abort (return to the list). Resolves `true` once
+ * every step has advanced. Steps are responsible for preserving their own input
+ * so going back and forward doesn't lose work.
+ */
+export async function runWizard(
+  steps: Array<() => Promise<boolean>>,
+): Promise<boolean> {
+  let i = 0;
+  while (i < steps.length) {
+    if (await steps[i]()) {
+      i++;
+    } else if (--i < 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // ── Interactive TUI runner ──────────────────────────────────────────────────
 
 export interface TuiHandlers {
   onOpen: (item: Worktree) => void;
   onDelete: (item: Worktree) => Promise<boolean>;
   onCreate: () => Promise<void>;
+  onAgent: () => Promise<void>;
+  /** Re-query worktrees after a create/agent so the list reflects the change. */
+  refreshItems: () => Promise<Worktree[]>;
 }
 
 export async function runInteractiveList(
@@ -430,16 +460,31 @@ export async function runInteractiveList(
             render();
           }
         } else if (key === 'c' || key === 'C') {
-          if (mode === 'repo') {
-            detachListener();
-            cleanupRawMode();
-            await handlers.onCreate();
-            resolve();
-          } else {
-            process.stdout.write(
-              pc.dim('\ncd into a repo first to create a worktree.\n'),
-            );
-          }
+          detachListener();
+          cleanupRawMode();
+          await handlers.onCreate();
+          allItems = await handlers.refreshItems();
+          filtered = filterItems(allItems, query);
+          selectedIndex = Math.min(
+            selectedIndex,
+            Math.max(0, filtered.length - 1),
+          );
+          setupRawMode();
+          attachListener();
+          render();
+        } else if (key === 'a' || key === 'A') {
+          detachListener();
+          cleanupRawMode();
+          await handlers.onAgent();
+          allItems = await handlers.refreshItems();
+          filtered = filterItems(allItems, query);
+          selectedIndex = Math.min(
+            selectedIndex,
+            Math.max(0, filtered.length - 1),
+          );
+          setupRawMode();
+          attachListener();
+          render();
         } else if (key === '\x7f') {
           query = query.slice(0, -1);
           filtered = filterItems(allItems, query);
