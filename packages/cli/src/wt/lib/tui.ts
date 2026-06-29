@@ -106,7 +106,9 @@ export function buildListLayout(
       const cursor = i === selectedIndex ? pc.cyan('▶') : ' ';
       const branchLabel = item.isCurrent
         ? pc.dim(`${item.branch} (current)`)
-        : pc.white(item.branch);
+        : item.isMain
+          ? pc.dim(`${item.branch} (main)`)
+          : pc.white(item.branch);
       const pathLabel = pc.dim(shortenPath(item.path));
       body.push(`  ${cursor} ${branchLabel}  ${pathLabel}`);
       if (item.lastCommit) {
@@ -558,6 +560,14 @@ export async function runInteractiveList(
         } else if (key === 'd' || key === 'D') {
           const item = filtered[selectedIndex];
           if (item) {
+            if (item.isMain) {
+              process.stdout.write(
+                pc.red(
+                  '\nCannot delete the main repository — only worktrees can be removed.\n',
+                ),
+              );
+              return;
+            }
             if (item.isCurrent) {
               process.stdout.write(
                 pc.red('\nCannot delete the worktree you are currently in.\n'),

@@ -7,6 +7,8 @@ export interface Worktree {
   path: string;
   branch: string;
   isCurrent: boolean;
+  /** The main worktree (first entry of `git worktree list`) — cannot be removed. */
+  isMain: boolean;
   repoRoot: string;
   lastCommit?: string;
 }
@@ -79,7 +81,7 @@ export function parseWorktreeList(
   return output
     .trim()
     .split('\n\n')
-    .map((block) => {
+    .map((block, index) => {
       const lines = block.trim().split('\n');
       const wtPath = lines[0].slice('worktree '.length);
       const branchLine = lines.find((l) => l.startsWith('branch '));
@@ -90,6 +92,8 @@ export function parseWorktreeList(
         path: wtPath,
         branch,
         isCurrent: cwd === wtPath || cwd.startsWith(wtPath + path.sep),
+        // The main worktree is always the first entry of `git worktree list`.
+        isMain: index === 0,
         repoRoot,
       };
     });
@@ -121,6 +125,21 @@ export function removeWorktree(
   worktreePath: string,
   force = false,
 ): void {
+  // Hard backstop: never remove the main worktree. `git worktree remove`
+  // refuses to, but the force fallback below would `rmSync` the directory and
+  // wipe the primary repo. Resolve symlinks so the comparison is canonical;
+  // fall back to the raw paths if either no longer exists on disk.
+  const resolve = (p: string): string => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  if (resolve(worktreePath) === resolve(repoRoot)) {
+    throw new Error('Refusing to remove the main worktree');
+  }
+
   try {
     execFileSync(
       'git',

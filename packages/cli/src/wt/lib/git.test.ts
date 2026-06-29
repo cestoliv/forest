@@ -67,6 +67,7 @@ describe('listWorktrees', () => {
     expect(worktrees).toHaveLength(1);
     expect(worktrees[0].path).toBe(repoDir);
     expect(worktrees[0].isCurrent).toBe(true);
+    expect(worktrees[0].isMain).toBe(true);
     expect(worktrees[0].repoRoot).toBe(repoDir);
   });
 
@@ -75,7 +76,12 @@ describe('listWorktrees', () => {
     execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
     const worktrees = listWorktrees(repoDir, repoDir);
     expect(worktrees).toHaveLength(2);
-    expect(worktrees.find((w) => w.branch === 'feature')).toBeDefined();
+    const feature = worktrees.find((w) => w.branch === 'feature');
+    expect(feature).toBeDefined();
+    // Only the main worktree is flagged; linked worktrees are not.
+    expect(feature?.isMain).toBe(false);
+    expect(worktrees.filter((w) => w.isMain)).toHaveLength(1);
+    expect(worktrees[0].isMain).toBe(true);
   });
 
   it('isCurrent is false for a sibling directory with the same prefix', () => {
@@ -127,6 +133,18 @@ describe('addWorktree', () => {
 });
 
 describe('removeWorktree', () => {
+  it('refuses to remove the main worktree and leaves it intact', () => {
+    expect(() => removeWorktree(repoDir, repoDir)).toThrow(
+      'Refusing to remove the main worktree',
+    );
+    // Even with force, the main repo directory must survive.
+    expect(() => removeWorktree(repoDir, repoDir, true)).toThrow(
+      'Refusing to remove the main worktree',
+    );
+    expect(existsSync(repoDir)).toBe(true);
+    expect(existsSync(path.join(repoDir, '.git'))).toBe(true);
+  });
+
   it('removes an additional worktree', () => {
     const wtPath = path.join(tmpDir, 'repo-to-remove');
     addWorktree(repoDir, wtPath, 'to-remove', 'HEAD');

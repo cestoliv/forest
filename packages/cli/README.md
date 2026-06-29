@@ -86,7 +86,7 @@ An interactive, fuzzy-searchable list of your worktrees:
 
 ```
 MY-PROJECT
-  ▶ main            ~/dev/my-project
+  ▶ main            (main)  ~/dev/my-project
       fix: resolve auth bug (2h ago)
     feat/dashboard  ~/dev/my-project-feat-dashboard
       wip: add chart component (1d ago)
@@ -108,6 +108,9 @@ and stays open** (preserving your search and cursor) instead of exiting — only
 `Enter` and `Q`/`Esc` leave the TUI. `P` prunes every worktree whose branch has
 already been merged (see [`wt prune`](#prune--wt-prune) below). Note that
 `a`/`c`/`d`/`p` are command keys, so they can't be typed into the search box.
+
+The main worktree is tagged `(main)` and is protected — `D` only removes linked
+worktrees, never the main repository.
 
 ## Create — `wt create [branch]`
 

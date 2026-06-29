@@ -17,7 +17,7 @@ Launch the interactive TUI. Shows worktrees for the current repo (repo mode) or 
 
 - Arrow keys — navigate
 - `Enter` — open worktree in IDE (exits the TUI)
-- `D` — delete worktree
+- `D` — delete worktree (the main worktree is tagged `(main)` and cannot be deleted — only linked worktrees can)
 - `P` — prune all merged worktrees (per-branch confirmation)
 - `C` — create a new worktree (works in both repo and global mode)
 - `A` — create a worktree and start an AI agent in it (works in both modes)

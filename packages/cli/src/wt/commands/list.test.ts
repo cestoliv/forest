@@ -85,6 +85,7 @@ describe('selectWipeCandidates', () => {
     path: '/r/wt',
     branch: 'feature',
     isCurrent: false,
+    isMain: false,
     repoRoot: '/r',
     ...over,
   });
@@ -100,8 +101,8 @@ describe('selectWipeCandidates', () => {
     expect(selectWipeCandidates(items, allMerged)).toEqual([]);
   });
 
-  it('excludes the main worktree (path === repoRoot)', () => {
-    const items = [wt({ path: '/r', repoRoot: '/r' })];
+  it('excludes the main worktree (isMain)', () => {
+    const items = [wt({ path: '/r', repoRoot: '/r', isMain: true })];
     expect(selectWipeCandidates(items, allMerged)).toEqual([]);
   });
 
@@ -118,7 +119,12 @@ describe('selectWipeCandidates', () => {
   it('keeps only merged worktrees from a mixed list', () => {
     const merged = wt({ path: '/r/merged', branch: 'merged' });
     const unmerged = wt({ path: '/r/unmerged', branch: 'unmerged' });
-    const main = wt({ path: '/r', repoRoot: '/r', branch: 'main' });
+    const main = wt({
+      path: '/r',
+      repoRoot: '/r',
+      branch: 'main',
+      isMain: true,
+    });
     const result = selectWipeCandidates(
       [merged, unmerged, main],
       (w) => w.branch === 'merged' || w.branch === 'main',

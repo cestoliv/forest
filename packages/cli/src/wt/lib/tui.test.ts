@@ -19,18 +19,21 @@ const items: Worktree[] = [
     path: '/projects/repo',
     branch: 'main',
     isCurrent: true,
+    isMain: true,
     repoRoot: '/projects/repo',
   },
   {
     path: '/projects/repo-feature',
     branch: 'my-feature',
     isCurrent: false,
+    isMain: false,
     repoRoot: '/projects/repo',
   },
   {
     path: '/projects/other',
     branch: 'main',
     isCurrent: false,
+    isMain: true,
     repoRoot: '/projects/other',
   },
 ];
@@ -118,12 +121,21 @@ describe('renderList', () => {
     expect(globalOutput).toContain('OTHER');
   });
 
+  it('labels the main worktree with (main)', () => {
+    // items[2] is a main worktree that is not the current one. (The label is
+    // dimmed like (current) to read as protected, but picocolors strips ANSI
+    // in the non-TTY test env, so only the text is asserted here.)
+    const output = renderList(items, 0, '', 'global');
+    expect(output).toContain('(main)');
+  });
+
   it('shows lastCommit on a second line when set', () => {
     const withCommit: Worktree[] = [
       {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: 'fix: correct login redirect',
       },
@@ -138,6 +150,7 @@ describe('renderList', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: '',
       },
@@ -147,6 +160,7 @@ describe('renderList', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: 'some commit',
       },
@@ -195,6 +209,7 @@ describe('buildListLayout', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: 'fix: thing',
       },
@@ -279,6 +294,7 @@ describe('renderList viewport', () => {
     path: `/projects/repo-${n}`,
     branch: `branch-${n}`,
     isCurrent: false,
+    isMain: false,
     repoRoot: '/projects/repo',
   }));
 

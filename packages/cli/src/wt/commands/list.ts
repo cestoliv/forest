@@ -288,7 +288,7 @@ export async function deleteWorktree(
 
 /**
  * Pure filter: keep only worktrees that are safe-and-merged prune candidates.
- * Excludes the current worktree, the main worktree (`path === repoRoot`), and
+ * Excludes the current worktree, the main worktree (`isMain`), and
  * detached-HEAD worktrees; then applies the injected `isMerged` predicate.
  */
 export function selectWipeCandidates(
@@ -297,10 +297,7 @@ export function selectWipeCandidates(
 ): Worktree[] {
   return items.filter(
     (wt) =>
-      !wt.isCurrent &&
-      wt.path !== wt.repoRoot &&
-      wt.branch !== '(detached)' &&
-      isMerged(wt),
+      !wt.isCurrent && !wt.isMain && wt.branch !== '(detached)' && isMerged(wt),
   );
 }
 
