@@ -111,9 +111,17 @@ only the worktree is removed.
 wt prune   # review and remove merged worktrees, one prompt per branch
 ```
 
-Merge detection is patch-id based (via `git cherry`), so a single-commit branch
-that was **squash-merged** through a PR is still recognized as merged. It also
-best-effort fetches the remote first so detection sees up-to-date refs; if the
+Merge detection works in tiers. A branch whose diff already exists in base by
+patch id (via `git cherry`, so a single-commit branch **squash-merged** through a
+PR is recognized offline) is merged. For the ambiguous case — the branch tip is
+an ancestor of base but 0 commits ahead, which a **fast-forward / merge-commit**
+merge and a worktree holding only *uncommitted* work both produce — it consults
+the **forge**: a merged PR/MR (via `gh` for GitHub, `glab` for GitLab incl.
+self-hosted, auto-detected from the remote) is the only reliable signal. If the
+forge can't answer (CLI missing, offline, branch unpushed, no merged PR/MR) the
+branch is left alone. A worktree still sitting exactly on the base commit is
+never offered. `wt prune` also best-effort fetches the remote first so detection
+sees up-to-date refs; if the
 base ref can't be resolved (e.g. offline), nothing is removed. Works in repo
 mode (current repo) and global mode (all registered repos, each against its own
 `base_branch`). The TUI exposes the same action under the `p` key.

@@ -16,7 +16,10 @@ prompt.
 npm install -g @cestoliv/wt   # also the update command
 ```
 
-Requires Node.js 20+ and Git. The command is `wt`.
+Requires Node.js 20+ and Git. The command is `wt`. Optionally install the
+[`gh`](https://cli.github.com/) and/or [`glab`](https://gitlab.com/gitlab-org/cli)
+CLIs (authenticated) to let `wt prune` confirm merges via merged PRs/MRs — see
+[Prune](#prune--wt-prune).
 
 ## Let your AI assistant set it up
 
@@ -140,8 +143,16 @@ and force-confirming when git refuses (submodules or uncommitted changes), just
 like a manual `D` delete. The branch itself stays; only the worktree is removed.
 Your `teardown_commands` run before each removal.
 
-Merge detection is patch-id based (via `git cherry`), so a single-commit branch
-**squash-merged** through a PR is still detected. `wt prune` best-effort fetches
+Merge detection is tiered. Patch-id matches (via `git cherry`) catch a
+single-commit branch **squash-merged** through a PR, offline. For the ambiguous
+case — the branch tip is an ancestor of base but 0 commits ahead, which both a
+**fast-forward / merge-commit** merge and a worktree holding only *uncommitted*
+work produce — it consults the **forge**: a merged PR/MR (via `gh` for GitHub or
+`glab` for GitLab, including self-hosted, auto-detected from the remote) is the
+only reliable signal, so a branch with unmerged work-in-progress is never
+mistaken for merged. If no forge CLI is available (or you're offline) such
+branches are simply left alone. A worktree still sitting exactly on the base
+commit is never offered. `wt prune` best-effort fetches
 the remote first; if the base ref can't be resolved (offline, missing), it
 removes nothing. The TUI exposes the same action under the `P` key. Works in
 repo mode and across all registered repos in global mode (each against its own

@@ -394,6 +394,71 @@ describe('isBranchMerged', () => {
     expect(isBranchMerged(repoDir, 'rebased', b)).toBe(true);
   });
 
+  // Set up an ambiguous fast-forward / merge-commit branch: its commit lands
+  // verbatim in base, so the tip becomes a strict ancestor of base and
+  // `git cherry` emits nothing. Git alone cannot decide — only the forge can.
+  // `pushed` simulates the branch having been pushed (a remote-tracking ref),
+  // which gates the forge lookup.
+  const setupMergedFf = (pushed = true): string => {
+    const b = base();
+    execSync('git checkout -b merged-ff', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'ff.txt'), 'ff content');
+    execSync('git add . && git commit -m "ff work"', { cwd: repoDir });
+    if (pushed) {
+      execSync('git update-ref refs/remotes/origin/merged-ff merged-ff', {
+        cwd: repoDir,
+      });
+    }
+    execSync(`git checkout ${b}`, { cwd: repoDir });
+    execSync('git merge --no-ff -m "merge merged-ff" merged-ff', {
+      cwd: repoDir,
+    });
+    return b;
+  };
+
+  it('consults the forge for a pushed ancestor branch and returns true when it has a merged PR/MR', () => {
+    const b = setupMergedFf();
+    const forge = () => true;
+    expect(isBranchMerged(repoDir, 'merged-ff', b, forge)).toBe(true);
+  });
+
+  it('consults the forge for a pushed ancestor branch and returns false when it has no merged PR/MR', () => {
+    const b = setupMergedFf();
+    // The WIP-on-stale-base case looks identical to git; the forge says "no".
+    const forge = () => false;
+    expect(isBranchMerged(repoDir, 'merged-ff', b, forge)).toBe(false);
+  });
+
+  it('does not consult the forge for an ancestor branch that was never pushed', () => {
+    const b = setupMergedFf(false);
+    let called = false;
+    const forge = () => {
+      called = true;
+      return true;
+    };
+    // No remote-tracking ref → it cannot have a merged PR/MR → skip the lookup.
+    expect(isBranchMerged(repoDir, 'merged-ff', b, forge)).toBe(false);
+    expect(called).toBe(false);
+  });
+
+  it('does not consult the forge when git already proves the merge (squash)', () => {
+    const b = base();
+    execSync('git checkout -b squashed2', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 's2.txt'), 'squash2');
+    execSync('git add . && git commit -m "squash2 work"', { cwd: repoDir });
+    execSync(`git checkout ${b}`, { cwd: repoDir });
+    execSync('git merge --squash squashed2', { cwd: repoDir });
+    execSync('git commit -m "squash2 (squashed)"', { cwd: repoDir });
+
+    let called = false;
+    const forge = () => {
+      called = true;
+      return false;
+    };
+    expect(isBranchMerged(repoDir, 'squashed2', b, forge)).toBe(true);
+    expect(called).toBe(false);
+  });
+
   it('returns false for a brand-new branch with no commits of its own', () => {
     const b = base();
     // A freshly-created worktree branch points at base and has done no work; it
