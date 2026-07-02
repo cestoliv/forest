@@ -1,5 +1,6 @@
 // src/commands/list.ts
 
+import path from 'node:path';
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import {
@@ -14,6 +15,7 @@ import {
   isBranchMerged,
   listWorktreeDirtyFiles,
   listWorktrees,
+  remoteExists,
   removeWorktree,
   type Worktree,
 } from '../lib/git.js';
@@ -344,6 +346,14 @@ export async function wipeWorktrees(
       );
       if (parts.length !== 2) continue;
       const remote = parts[0] || 'origin';
+      if (!remoteExists(wt.repoRoot, remote)) {
+        console.warn(
+          pc.yellow(
+            `⚠ ${path.basename(wt.repoRoot)} has no "${remote}" remote — falling back to local git`,
+          ),
+        );
+        continue;
+      }
       try {
         fetchRemote(wt.repoRoot, remote);
       } catch (err) {

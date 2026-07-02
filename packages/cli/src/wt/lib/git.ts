@@ -330,6 +330,24 @@ export function fetchRemote(repoRoot: string, remote = 'origin'): void {
   });
 }
 
+/**
+ * Whether `repoRoot` has a git remote named `remote`. Used to skip (and warn
+ * about) fetching in local-only repos that have no remote configured. Fails
+ * closed (`false`) on any error.
+ */
+export function remoteExists(repoRoot: string, remote = 'origin'): boolean {
+  try {
+    const out = execFileSync('git', ['remote'], {
+      cwd: repoRoot,
+      stdio: 'pipe',
+      encoding: 'utf8',
+    });
+    return out.split('\n').some((line) => line.trim() === remote);
+  } catch {
+    return false;
+  }
+}
+
 export function resolveWorktreePath(
   repoRoot: string,
   worktreePath: string,

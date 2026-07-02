@@ -20,6 +20,7 @@ import {
   listWorktreeDirtyFiles,
   listWorktrees,
   parseWorktreeList,
+  remoteExists,
   removeWorktree,
   resolveWorktreePath,
   setUpstreamTracking,
@@ -290,6 +291,27 @@ describe('fetchRemote', () => {
 
   it('throws when the remote does not exist', () => {
     expect(() => fetchRemote(cloneDir, 'nonexistent')).toThrow();
+  });
+});
+
+describe('remoteExists', () => {
+  it('returns true for a configured remote', () => {
+    const { cloneDir } = cloneBareAndCheckout(tmpDir, repoDir);
+    expect(remoteExists(cloneDir, 'origin')).toBe(true);
+  });
+
+  it('returns false for a missing remote', () => {
+    const { cloneDir } = cloneBareAndCheckout(tmpDir, repoDir);
+    expect(remoteExists(cloneDir, 'upstream')).toBe(false);
+  });
+
+  it('returns false for a local-only repo with no remotes', () => {
+    // repoDir is initialized without any remote
+    expect(remoteExists(repoDir, 'origin')).toBe(false);
+  });
+
+  it('fails closed (false) on a non-repo path', () => {
+    expect(remoteExists(path.join(tmpDir, 'does-not-exist'))).toBe(false);
   });
 });
 

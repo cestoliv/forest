@@ -282,7 +282,7 @@ describe('createWorktree (fetch)', () => {
     warnSpy.mockRestore();
   });
 
-  it('warns when fetch fails and throws if base branch is also invalid', async () => {
+  it('warns (no remote) and throws if base branch is also invalid', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig(
       {
@@ -297,15 +297,14 @@ describe('createWorktree (fetch)', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    // Will fail to fetch "nonexistent-remote" but should still create from HEAD
-    // since the branch doesn't exist and baseBranch ref resolution will also fail,
-    // we expect an error from git worktree add itself
+    // The repo has no "nonexistent-remote" remote, so fetch is skipped with a
+    // "no remote" warning; creation still fails because the base ref is invalid.
     await expect(
       createWorktree('feature', { cwd: repoDir, store }),
     ).rejects.toThrow();
 
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Could not fetch'),
+      expect.stringContaining('has no "nonexistent-remote" remote'),
     );
     warnSpy.mockRestore();
   });

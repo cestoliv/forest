@@ -1,5 +1,6 @@
 // src/commands/create.ts
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import {
@@ -14,6 +15,7 @@ import {
   fetchRemote,
   getRepoRoot,
   listWorktrees,
+  remoteExists,
   resolveWorktreePath,
   setUpstreamTracking,
 } from '../lib/git.js';
@@ -143,14 +145,22 @@ export async function prepareWorktree(
   const remote = parts[0] || 'origin';
 
   if (parts.length === 2) {
-    try {
-      fetchRemote(repoRoot, remote);
-    } catch (err) {
+    if (!remoteExists(repoRoot, remote)) {
       console.warn(
         pc.yellow(
-          `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+          `⚠ ${path.basename(repoRoot)} has no "${remote}" remote — falling back to local git`,
         ),
       );
+    } else {
+      try {
+        fetchRemote(repoRoot, remote);
+      } catch (err) {
+        console.warn(
+          pc.yellow(
+            `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+          ),
+        );
+      }
     }
   }
 
