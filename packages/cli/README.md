@@ -46,7 +46,7 @@ wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
 ```
 
-## `wt agent <branch> <plan_prompt> [--mode <mode>]` — the standout
+## `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>]` — the standout
 
 ```bash
 wt agent feat/login "Read the codebase, then propose a plan for login."
@@ -98,14 +98,14 @@ MY-PROJECT
 ↕ navigate · Enter open · D delete · P prune · C create · A agent · Q quit
 ```
 
-Type to fuzzy-filter branches instantly. Inside a repo it shows that repo's
-worktrees; run it outside any repo ("home") to browse worktrees across all
-registered repos.
+Type to fuzzy-filter branches instantly. `wt` always shows worktrees across
+**all registered repos**, regardless of where you run it — the current repo is
+auto-registered for discovery, never used to scope the list.
 
 `C` creates a worktree and `A` creates one and starts an AI agent in it — both
-work from anywhere and are step-by-step wizards. Run from home and they first
-prompt for the repo, then the branch (`C` stops there); `A` adds a plan prompt
-and a permission mode — **worktree (repo → branch) → plan prompt → permission
+work from anywhere and are step-by-step wizards. They **always** prompt for the
+repo first, then the branch (`C` stops there); `A` adds a plan prompt and a
+permission mode — **worktree (repo → branch) → plan prompt → permission
 mode**. Pressing `Esc` steps back to the previous question (answers preserved),
 or back to the list from the first step. After creating, the list **refreshes
 and stays open** (preserving your search and cursor) instead of exiting — only
@@ -116,16 +116,21 @@ already been merged (see [`wt prune`](#prune--wt-prune) below). Note that
 The main worktree is tagged `(main)` and is protected — `D` only removes linked
 worktrees, never the main repository.
 
-## Create — `wt create [branch]`
+## Create — `wt create [branch] [--repo <path>]`
 
 ```bash
-wt create feat/login   # From base branch (origin/main by default)
-wt create              # Prompts for a branch name
+wt create feat/login              # From base branch (origin/main by default)
+wt create                         # Prompts for a branch name
+wt create feat/login --repo ~/dev/my-project   # Skip the picker, target a repo
 ```
 
 Creates a worktree as a sibling directory (`../my-project-feat-login`), runs your
-`setup_commands`, and opens it in your IDE. Run it outside a repo to pick from
-registered repos.
+`setup_commands`, and opens it in your IDE. It **always** prompts you to pick the
+target repo from the registered repos (the current repo is auto-registered for
+discovery but never assumed) — so in a non-interactive shell it exits non-zero
+because the picker needs a TTY. Pass `--repo <path>` to name the target repo
+explicitly and skip the picker (the path is validated as a git repo; a bad path
+errors). `wt agent` accepts the same `--repo <path>` flag.
 
 If the path already exists, `wt create` offers to open it in your IDE instead of
 erroring (in a non-interactive shell it exits non-zero).
@@ -154,9 +159,8 @@ mistaken for merged. If no forge CLI is available (or you're offline) such
 branches are simply left alone. A worktree still sitting exactly on the base
 commit is never offered. `wt prune` best-effort fetches
 the remote first; if the base ref can't be resolved (offline, missing), it
-removes nothing. The TUI exposes the same action under the `P` key. Works in
-repo mode and across all registered repos in global mode (each against its own
-`base_branch`).
+removes nothing. The TUI exposes the same action under the `P` key. Always runs
+across all registered repos (each against its own `base_branch`).
 
 ## Configuration
 
@@ -174,10 +178,10 @@ Edit with `wt config` (`wt config --path` prints the file location —
 | `agent_command`       | `"claude"`                        | Base command; `--permission-mode <mode>` injected, then prompt appended             |
 | `agent_mode`          | `"default"`                       | Default permission mode for `wt agent` (overridden by `--mode`)                     |
 | `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses                                    |
-| `auto_refresh_minutes`| `5`                               | How often the interactive list re-fetches worktrees (shows a "last refreshed" header); `0` disables it |
-| `repo_overrides`      | `{}`                              | Per-repo overrides for any key above                                                |
+| `auto_refresh_minutes`| `5`                               | How often the interactive list re-fetches worktrees (shows a "last refreshed" header); `0` disables it. **Global only** — not per-repo overridable |
+| `repo_overrides`      | `{}`                              | Per-repo overrides for the keys above (except the global-only `auto_refresh_minutes`) |
 
-Override any key per repo:
+Override any key per repo (except the global-only `auto_refresh_minutes`):
 
 ```json
 {

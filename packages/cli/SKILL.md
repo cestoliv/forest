@@ -11,7 +11,7 @@ description: Use the wt CLI to create, browse, open, and delete git worktrees ac
 
 ### `wt` (no subcommand)
 
-Launch the interactive TUI. Shows worktrees for the current repo (repo mode) or all registered repos (global mode, when run outside a repo).
+Launch the interactive TUI. Always shows worktrees across all registered repos, no matter where it is run. The current repo (if any) is auto-registered for discovery, but is never used to scope the list to a single repo.
 
 **Keybindings in the TUI:**
 
@@ -19,15 +19,13 @@ Launch the interactive TUI. Shows worktrees for the current repo (repo mode) or 
 - `Enter` — open worktree in IDE (exits the TUI)
 - `D` — delete worktree (the main worktree is tagged `(main)` and cannot be deleted — only linked worktrees can)
 - `P` — prune all merged worktrees (per-branch confirmation)
-- `C` — create a new worktree (works in both repo and global mode)
-- `A` — create a worktree and start an AI agent in it (works in both modes)
+- `C` — create a new worktree
+- `A` — create a worktree and start an AI agent in it
 - type to search · `Backspace` — edit search
 - `Q` / `Esc` — quit
 
-`C` and `A` are step-by-step wizards. In global mode (run from outside a repo /
-"home") they start by prompting for the repo (picker), then the branch; in repo
-mode the repo is fixed so they start at the branch. `A` then adds two more
-steps:
+`C` and `A` are step-by-step wizards. They **always** start by prompting for the
+repo (picker), then the branch. `A` then adds two more steps:
 
 - `C` — **worktree (repo → branch)**
 - `A` — **worktree (repo → branch) → plan prompt → permission mode**
@@ -42,9 +40,11 @@ and `Q`/`Esc` exit.
 Because `a`/`A`, `c`/`C`, `d`/`D`, and `p`/`P` are reserved as command keys,
 those letters can't be typed into the search box.
 
-### `wt create [branch]`
+### `wt create [branch] [--repo <path>]`
 
-Create a new worktree. If `branch` is omitted, prompts interactively.
+Create a new worktree. Always prompts you to pick the target repo from the registered repos first (the current repo is auto-registered for discovery but never assumed). If `branch` is omitted, prompts for it too. In a non-interactive shell it exits non-zero because the repo picker needs a TTY.
+
+Pass `--repo <path>` to target a repo explicitly and skip the picker. The path is resolved against the current directory and validated as a git repo root; a path that is not a git repository errors (`✗ <path> is not a git repository`) and nothing is created. The resolved repo is also registered for future discovery.
 
 The worktree is created as a sibling directory to the repo: `<parent>/<repo-name>-<branch-name>`.
 
@@ -54,7 +54,7 @@ If the worktree path already exists, `wt create` doesn't error — it prompts yo
 to **open it in the IDE** or **quit**. (In a non-interactive shell it errors
 with a non-zero exit instead of prompting.)
 
-### `wt agent <branch> <plan_prompt> [--mode <mode>]`
+### `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>]`
 
 Create a worktree (same as `wt create`) **and** auto-start an AI agent in Zed's
 integrated terminal, pre-filled with `<plan_prompt>` and left interactive for
@@ -64,7 +64,12 @@ you to take over.
 wt agent feature/login 'Read the codebase, then propose a plan for login.'
 wt agent feature/fix 'Fix the bug in payment processing' --mode auto
 wt agent refactor/api 'Refactor the API layer' --mode default
+wt agent feature/login 'Plan login' --repo ~/dev/my-project   # skip the picker
 ```
+
+Like `wt create`, it always prompts for the target repo unless `--repo <path>`
+is given (same validation: the path must be a git repo root, else it errors and
+creates nothing).
 
 The `--mode` flag sets Claude Code's permission mode (defaults to `default`;
 change the default with the `agent_mode` config key):
@@ -122,9 +127,9 @@ forge can't answer (CLI missing, offline, branch unpushed, no merged PR/MR) the
 branch is left alone. A worktree still sitting exactly on the base commit is
 never offered. `wt prune` also best-effort fetches the remote first so detection
 sees up-to-date refs; if the
-base ref can't be resolved (e.g. offline), nothing is removed. Works in repo
-mode (current repo) and global mode (all registered repos, each against its own
-`base_branch`). The TUI exposes the same action under the `p` key.
+base ref can't be resolved (e.g. offline), nothing is removed. Always runs across
+all registered repos (each against its own `base_branch`). The TUI exposes the
+same action under the `p` key.
 
 ### `wt config`
 
@@ -156,13 +161,13 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | `agent_command`       | `string`   | `"claude"`                        | Base command `wt agent` runs in Zed; `--permission-mode <mode>` is injected (any existing one replaced), then `<plan_prompt>` is appended single-quoted                   |
 | `agent_mode`          | `string`   | `"default"`                       | Default Claude Code permission mode for `wt agent`; the `--mode` flag overrides it. One of `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`        |
 | `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
-| `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh                                             |
+| `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh. **Global only** — not per-repo overridable |
 | `repos`               | `string[]` | `[]`                              | Registered repo paths (auto-populated on first use)                                                                                                                       |
 | `repo_overrides`      | `object`   | `{}`                              | Per-repo config overrides (see below)                                                                                                                                     |
 
 ### Per-repo overrides
 
-Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_mode`, `agent_trigger_chord`, `auto_refresh_minutes`) for a specific repo:
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_mode`, `agent_trigger_chord`) for a specific repo. `auto_refresh_minutes` is global-only and cannot be overridden per repo:
 
 ```json
 {
@@ -200,4 +205,4 @@ wt config
 
 ### Browse all worktrees across repos
 
-Run `wt` from any directory outside a git repo to see worktrees from all registered repos.
+Run `wt` from anywhere — it always lists worktrees from all registered repos.

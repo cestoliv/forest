@@ -99,7 +99,7 @@ describe('createAgentWorktree', () => {
     const store = configure();
 
     const promise = createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
     });
     await vi.runAllTimersAsync();
@@ -115,7 +115,10 @@ describe('createAgentWorktree', () => {
   it('falls back to opening the IDE when it is not Zed', async () => {
     const store = configure({ ide: 'echo' });
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
 
     expect(openIde).toHaveBeenCalledWith('echo', [], expect.any(String));
     expect(console.log).toHaveBeenCalledWith(
@@ -128,7 +131,10 @@ describe('createAgentWorktree', () => {
   it('errors but still opens Zed when agent_command is empty', async () => {
     const store = configure({ agent_command: '' });
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
 
     expect(console.error).toHaveBeenCalledWith(
       expect.stringContaining('No agent_command'),
@@ -141,7 +147,10 @@ describe('createAgentWorktree', () => {
     const store = configure();
     vi.mocked(ensureKeymap).mockReturnValue(false);
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
 
     expect(openIde).toHaveBeenCalledWith('zed', [], expect.any(String));
     expect(triggerChord).not.toHaveBeenCalled();
@@ -159,7 +168,10 @@ describe('createAgentWorktree', () => {
       message: 'boom',
     });
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
 
     expect(triggerChord).toHaveBeenCalled();
     expect(cleanupAgentTask).not.toHaveBeenCalled();
@@ -175,7 +187,10 @@ describe('createAgentWorktree', () => {
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = true;
     try {
-      await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+      await createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+      });
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }
@@ -194,7 +209,10 @@ describe('createAgentWorktree', () => {
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = true;
     try {
-      await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+      await createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+      });
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }
@@ -218,6 +236,42 @@ describe('createAgentWorktree', () => {
     expect(writeAgentTask).not.toHaveBeenCalled();
     expect(openIde).not.toHaveBeenCalled();
   });
+
+  it('runs the repo picker even when cwd is inside a git repo', async () => {
+    vi.useFakeTimers();
+    const store = configure();
+    const repoPicker = vi.fn(async () => repoDir);
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    try {
+      const promise = createAgentWorktree('feature', 'do stuff', {
+        cwd: repoDir,
+        store,
+        repoPicker,
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(repoPicker).toHaveBeenCalled();
+      expect(writeAgentTask).toHaveBeenCalled();
+    } finally {
+      process.stdin.isTTY = originalIsTTY;
+    }
+  });
+
+  it('skips the repo picker when repoRoot is passed explicitly', async () => {
+    vi.useFakeTimers();
+    const store = configure();
+    const repoPicker = vi.fn(async () => repoDir);
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      repoPicker,
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+    expect(repoPicker).not.toHaveBeenCalled();
+    expect(writeAgentTask).toHaveBeenCalled();
+  });
 });
 
 describe('createAgentWorktree (mode resolution)', () => {
@@ -227,7 +281,7 @@ describe('createAgentWorktree (mode resolution)', () => {
   ) => {
     vi.useFakeTimers();
     const promise = createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       ...(mode !== undefined ? { mode } : {}),
     });
@@ -297,7 +351,7 @@ describe('createAgentWorktree (mode resolution)', () => {
     try {
       await expect(
         createAgentWorktree('feature', 'do stuff', {
-          cwd: repoDir,
+          repoRoot: repoDir,
           store,
           mode: 'bogus',
         }),
@@ -325,7 +379,7 @@ describe('createAgentWorktree (existing worktree)', () => {
     const store = preexisting();
 
     await createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: async () => 'quit' as const,
     });
@@ -338,7 +392,7 @@ describe('createAgentWorktree (existing worktree)', () => {
     const store = preexisting();
 
     await createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: async () => 'open' as const,
     });
@@ -353,7 +407,7 @@ describe('createAgentWorktree (existing worktree)', () => {
     const store = preexisting();
 
     const promise = createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: async () => 'agent' as const,
     });

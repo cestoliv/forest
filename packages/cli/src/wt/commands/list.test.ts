@@ -28,12 +28,11 @@ afterEach(() => {
 });
 
 describe('prepareListItems', () => {
-  it('returns repo mode when cwd is inside a git repo', async () => {
+  it("lists the repo's worktrees when cwd is inside it", async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     const result = await prepareListItems({ cwd: repoDir, store });
-    expect(result.mode).toBe('repo');
-    expect(result.repoRoot).toBe(repoDir);
     expect(result.items.length).toBeGreaterThan(0);
+    expect(result.items.some((w) => w.repoRoot === repoDir)).toBe(true);
   });
 
   it('auto-registers the repo on first run', async () => {
@@ -56,27 +55,51 @@ describe('prepareListItems', () => {
     expect(repos.filter((r) => r === repoDir)).toHaveLength(1);
   });
 
-  it('returns global mode when cwd is outside any git repo', async () => {
-    const store = createStore(path.join(tmpDir, 'config'));
-    const result = await prepareListItems({ cwd: tmpDir, store });
-    expect(result.mode).toBe('global');
-    expect(result.repoRoot).toBeNull();
-  });
-
-  it('global mode includes worktrees from all registered repos', async () => {
+  it('lists worktrees from registered repos regardless of cwd', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig({ repos: [repoDir] }, store);
     const result = await prepareListItems({ cwd: tmpDir, store });
-    expect(result.mode).toBe('global');
     expect(result.items.length).toBeGreaterThan(0);
     expect(result.items[0].repoRoot).toBe(repoDir);
   });
 
-  it('global mode marks no worktree as current when cwd is outside all repos', async () => {
+  it('always lists all registered repos even from inside one of them', async () => {
+    // Second registered repo, distinct from the cwd repo.
+    const otherDir = path.join(tmpDir, 'other-repo');
+    execSync(`mkdir -p ${otherDir}`);
+    execSync('git init', { cwd: otherDir });
+    execSync('git config user.email "t@t.com"', { cwd: otherDir });
+    execSync('git config user.name "T"', { cwd: otherDir });
+    writeFileSync(path.join(otherDir, 'README.md'), '');
+    execSync('git add .', { cwd: otherDir });
+    execSync('git commit -m "init"', { cwd: otherDir });
+
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ repos: [repoDir, otherDir] }, store);
+
+    // cwd is inside repoDir, yet the list must still include otherDir's worktrees.
+    const result = await prepareListItems({ cwd: repoDir, store });
+    const roots = new Set(result.items.map((w) => w.repoRoot));
+    expect(roots.has(repoDir)).toBe(true);
+    expect(roots.has(otherDir)).toBe(true);
+  });
+
+  it('marks no worktree as current when cwd is outside all repos', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig({ repos: [repoDir] }, store);
     const result = await prepareListItems({ cwd: tmpDir, store });
     expect(result.items.every((w) => !w.isCurrent)).toBe(true);
+  });
+
+  it('marks the current worktree when cwd is inside a registered worktree', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    setGlobalConfig({ repos: [repoDir] }, store);
+
+    const result = await prepareListItems({ cwd: wtPath, store });
+    const current = result.items.find((w) => w.isCurrent);
+    expect(current?.path).toBe(wtPath);
   });
 });
 

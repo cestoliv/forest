@@ -36,26 +36,23 @@ interface WorktreeTarget {
 }
 
 /**
- * Build the leading wizard steps shared by create and agent: pick the repo
- * (global mode only) then enter the branch. Both write into `state`, and each
- * step preserves its prior answer so back-navigation doesn't lose input.
+ * Build the leading wizard steps shared by create and agent: always pick the
+ * repo, then enter the branch. Both write into `state`, and each step preserves
+ * its prior answer so back-navigation doesn't lose input.
  */
 function buildWorktreeSteps(
-  repoRoot: string | null,
   store: ConfigStore,
   state: WorktreeTarget,
 ): Array<() => Promise<boolean>> {
   const steps: Array<() => Promise<boolean>> = [];
 
-  if (!repoRoot) {
-    const repos = getRegisteredRepos(store);
-    steps.push(async () => {
-      const picked = await runRepoPicker(repos, state.pickedRepo);
-      if (!picked) return false;
-      state.pickedRepo = picked;
-      return true;
-    });
-  }
+  const repos = getRegisteredRepos(store);
+  steps.push(async () => {
+    const picked = await runRepoPicker(repos, state.pickedRepo);
+    if (!picked) return false;
+    state.pickedRepo = picked;
+    return true;
+  });
 
   steps.push(async () => {
     const entered = await runBranchInput(
@@ -72,8 +69,6 @@ function buildWorktreeSteps(
 
 export interface ListItems {
   items: Worktree[];
-  mode: 'repo' | 'global';
-  repoRoot: string | null;
 }
 
 export async function prepareListItems(
@@ -81,37 +76,32 @@ export async function prepareListItems(
 ): Promise<ListItems> {
   const { cwd = process.cwd(), store = createStore() } = options;
 
-  let repoRoot: string | null = null;
+  // Auto-register the current repo for discovery (never scope to it): the list
+  // is always global. Passing `cwd` to `listWorktrees` still marks the current
+  // worktree so it renders as `(current)`.
   try {
-    repoRoot = getRepoRoot(cwd);
+    registerRepo(getRepoRoot(cwd), store);
   } catch {
-    // not in a repo — fall through to global mode
+    // not in a repo — nothing to auto-register
   }
 
-  if (repoRoot) {
-    registerRepo(repoRoot, store);
-    const items = listWorktrees(repoRoot, cwd);
-    return { items, mode: 'repo', repoRoot };
-  }
-
-  const repos = getRegisteredRepos(store);
-  const items = repos.flatMap((repo) => {
+  const items = getRegisteredRepos(store).flatMap((repo) => {
     try {
       return listWorktrees(repo, cwd);
     } catch {
       return [];
     }
   });
-  return { items, mode: 'global', repoRoot: null };
+  return { items };
 }
 
 export async function runList(
   options: { cwd?: string; store?: ConfigStore } = {},
 ): Promise<void> {
   const { store = createStore(), cwd = process.cwd() } = options;
-  const { items, mode, repoRoot } = await prepareListItems({ cwd, store });
+  const { items } = await prepareListItems({ cwd, store });
 
-  if (items.length === 0 && mode === 'global') {
+  if (items.length === 0) {
     console.log(
       pc.dim(
         'No repos registered. Run `wt create` inside a repo to get started.',
@@ -120,14 +110,10 @@ export async function runList(
     return;
   }
 
-  const autoRefreshMinutes =
-    mode === 'repo' && repoRoot
-      ? getEffectiveConfig(repoRoot, store).auto_refresh_minutes
-      : getGlobalConfig(store).auto_refresh_minutes;
+  const autoRefreshMinutes = getGlobalConfig(store).auto_refresh_minutes;
 
   await runInteractiveList(
     items,
-    mode,
     {
       onOpen: (item) => {
         const config = getEffectiveConfig(item.repoRoot, store);
@@ -141,15 +127,18 @@ export async function runList(
       onCreate: async () => {
         // Wizard: worktree (repo → branch). Esc steps back (repo picker) and
         // drops to the list from the first step; preserved input avoids re-typing.
-        const state: WorktreeTarget = { pickedRepo: repoRoot ?? undefined };
-        const steps = buildWorktreeSteps(repoRoot, store, state);
+        const state: WorktreeTarget = {};
+        const steps = buildWorktreeSteps(store, state);
 
         if (!(await runWizard(steps))) return; // cancelled out → back to the list
         if (state.pickedRepo === undefined || state.branch === undefined)
           return;
 
         const { createWorktree } = await import('./create.js');
-        await createWorktree(state.branch, { cwd: state.pickedRepo, store });
+        await createWorktree(state.branch, {
+          repoRoot: state.pickedRepo,
+          store,
+        });
       },
 
       onAgent: async () => {
@@ -158,10 +147,8 @@ export async function runList(
         // Wizard: worktree (repo → branch) → plan prompt → permission mode. Esc
         // steps back one (and to the list from the first step). Entered values
         // are preserved so going back and forward doesn't lose work.
-        const state: WorktreeTarget & { plan?: string; mode?: string } = {
-          pickedRepo: repoRoot ?? undefined,
-        };
-        const steps = buildWorktreeSteps(repoRoot, store, state);
+        const state: WorktreeTarget & { plan?: string; mode?: string } = {};
+        const steps = buildWorktreeSteps(store, state);
 
         steps.push(async () => {
           const entered = await clack.text({
@@ -199,7 +186,7 @@ export async function runList(
           return;
 
         await createAgentWorktree(state.branch, state.plan, {
-          cwd: state.pickedRepo,
+          repoRoot: state.pickedRepo,
           store,
           mode: state.mode,
         });

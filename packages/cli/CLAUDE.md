@@ -86,24 +86,24 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 `src/cli.ts` registers Commander commands and uses **dynamic imports** for each:
 
 - `wt` (default, no subcommand) → `src/commands/list.ts` — interactive TUI.
-  The `C` (create) and `A` (agent) shortcuts work in **both** repo and global
-  mode and are built as back-navigable wizards via `runWizard` (a generic
-  array-of-steps + index runner in `tui.ts`: each step resolves `true` to
-  advance or `false` to step back one; cancelling the first step aborts to the
-  list). The shared `buildWorktreeSteps(repoRoot, store, state)` helper supplies
-  the leading steps — `runRepoPicker` (global mode only) then `runBranchInput` —
-  writing into a mutable `state` object. `onCreate` runs just those steps; then
-  calls `createWorktree(branch, { cwd: pickedRepo })`. `onAgent` appends two more
-  steps — `clack.text` (plan) and `clack.select` (permission mode from the
-  exported `VALID_MODES`, preselecting the picked repo's effective `agent_mode`)
-  — for **worktree → plan → mode**, then calls
-  `createAgentWorktree(branch, plan, { cwd: pickedRepo, mode })`. Both pass the
-  resolved repo as `cwd` and the branch explicitly so `prepareWorktree` skips its
-  own pickers and only handles create + the existing-worktree prompt. Steps
-  preserve entered values (pickers take an optional initial value; clack uses
-  `initialValue`). After create/agent the list refreshes in place and stays open
-  (the `refreshItems` handler re-runs `prepareListItems`); only `Enter` (open)
-  and `Q`/`Esc` exit.
+  The `C` (create) and `A` (agent) shortcuts are back-navigable wizards via
+  `runWizard` (a generic array-of-steps + index runner in `tui.ts`: each step
+  resolves `true` to advance or `false` to step back one; cancelling the first
+  step aborts to the list). The shared `buildWorktreeSteps(store, state)` helper
+  supplies the leading steps — it **always** pushes `runRepoPicker` then
+  `runBranchInput`, writing into a mutable `state` object (`state.pickedRepo`
+  starts undefined and is only set by the picker). `onCreate` runs just those
+  steps; then calls `createWorktree(branch, { repoRoot: pickedRepo })`. `onAgent`
+  appends two more steps — `clack.text` (plan) and `clack.select` (permission
+  mode from the exported `VALID_MODES`, preselecting the picked repo's effective
+  `agent_mode`) — for **worktree → plan → mode**, then calls
+  `createAgentWorktree(branch, plan, { repoRoot: pickedRepo, mode })`. Both pass
+  the resolved repo as `repoRoot` (not `cwd`) and the branch explicitly so
+  `prepareWorktree` skips its own picker and only handles create + the
+  existing-worktree prompt. Steps preserve entered values (pickers take an
+  optional initial value; clack uses `initialValue`). After create/agent the
+  list refreshes in place and stays open (the `refreshItems` handler re-runs
+  `prepareListItems`); only `Enter` (open) and `Q`/`Esc` exit.
   `list.ts` also owns the shared delete/prune logic as reusable exports:
   `deleteWorktree` (single-worktree confirm → `teardown_commands` →
   `removeWorktree` → force-confirm on submodule/dirty errors; backs both the
@@ -118,7 +118,16 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 - `wt create [branch]` → `src/commands/create.ts`. The full create flow lives
   here as reusable exports: `prepareWorktree` (repo/branch resolution +
   worktree creation + `setup_commands`) and `openConfiguredIde` (open the
-  worktree in the configured IDE + report). `prepareWorktree` returns a
+  worktree in the configured IDE + report). `prepareWorktree` takes an optional
+  `repoRoot` option: when set it skips the picker; when unset the repo picker
+  **always** runs (`cwd` is used only to auto-register the current repo for
+  discovery, never to scope/default to it). `repoRoot` comes from either the TUI
+  wizard (an already-validated picked repo) or the `--repo <path>` CLI flag
+  (untrusted): it is resolved against `cwd` and validated with `getRepoRoot`, and
+  a path that isn't a git repo prints `✗ <path> is not a git repository` and
+  returns null; the resolved root is then `registerRepo`d for future discovery.
+  The branch is prompted via the injectable `branchInput` for all paths.
+  `prepareWorktree` returns a
   `status: 'created' | 'exists'` — when the path already exists as a registered
   worktree it returns early (no fetch/create) and the command prompts via the
   shared `promptExistingWorktree` (open IDE / start agent / quit; injectable for
@@ -133,8 +142,9 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   Zed/`agent_command` is unavailable. On an existing worktree it prompts with
   `promptExistingWorktree` (the agent option included) and reuses
   `startAgentInWorktree` for the "open and start agent" choice.
-- `wt prune` → `src/commands/prune.ts` — reuses `prepareListItems` (repo or
-  global) then `wipeWorktrees(items, store, { fetch: true })` from `list.ts`;
+- `wt prune` → `src/commands/prune.ts` — reuses `prepareListItems` (always
+  across all registered repos) then `wipeWorktrees(items, store, { fetch: true })`
+  from `list.ts`;
   no duplicated delete logic. Removes every worktree whose branch is merged into
   its repo's `base_branch`, one per-branch confirmation each.
 - `wt config [--path]` → `src/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
@@ -155,18 +165,27 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 
 ### Config & config layers
 
-Config lives in a single global JSON file managed by `conf`. `WtConfig` has top-level defaults plus `repo_overrides: Record<string, Partial<RepoConfig>>` for per-repo overrides. `getEffectiveConfig(repoPath)` merges them at call time. Per-repo-overridable keys live on `RepoConfig` (e.g. `auto_refresh_minutes`, default `5`, used by the interactive list's auto-refresh); global-only keys (`repos`, `repo_overrides`) live on `WtConfig`.
+Config lives in a single global JSON file managed by `conf`. `WtConfig` has top-level defaults plus `repo_overrides: Record<string, Partial<RepoConfig>>` for per-repo overrides. `getEffectiveConfig(repoPath)` merges them at call time. Per-repo-overridable keys live on `RepoConfig`; global-only keys live on `WtConfig` and are excluded from the `getEffectiveConfig` merge: `repos`, `repo_overrides`, and `auto_refresh_minutes` (default `5`, used by the interactive list's auto-refresh — read via `getGlobalConfig(store).auto_refresh_minutes`, deliberately **not** per-repo overridable).
 
-### Two operating modes
+### Always global
 
-`list.ts` detects whether the CWD is inside a git repo:
+The tool is **always global**: `list.ts`/`prune.ts` always show worktrees across
+**all registered repos**, regardless of the CWD. There is no repo-scoped mode.
+Being inside a git repo only triggers **auto-registration** of that repo for
+discovery (via `registerRepo(getRepoRoot(cwd))`, best-effort in a try/catch) —
+it never scopes or defaults the list, create, or prune to the current repo.
+`prepareListItems` still passes `cwd` to `listWorktrees` so the current worktree
+renders as `(current)`.
 
-- **Repo mode**: shows worktrees for the current repo only.
-- **Global mode**: shows worktrees across all registered repos (fallback when not in a repo).
-
-`C` (create) and `A` (agent) are enabled in **both** modes — in global mode the
-create/agent flow resolves the target repo via `prepareWorktree`'s repo-picker
-fallback (`createWorktree`/`createAgentWorktree` are called with `cwd: repoRoot ?? cwd`).
+`C` (create) and `A` (agent) — and `wt create`/`wt agent` — **always** prompt
+for the target repo via `prepareWorktree`'s repo picker. The picker is skipped
+only when a `repoRoot` is passed explicitly: the TUI wizard (which already ran
+its own picker) or the `--repo <path>` CLI flag (validated as a real git repo
+first). A consequence approved as part of this design: a non-TTY
+`wt create`/`wt agent` run from inside a repo (without `--repo`) exits with the
+"no TTY available" error because the picker needs a TTY — there is no
+single-repo shortcut. `wt prune` deliberately has **no** `--repo` flag: it stays
+global (all registered repos) so no scoping is reintroduced.
 
 ### Worktree path convention
 

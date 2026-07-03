@@ -28,6 +28,11 @@ export type ExistingWorktreeAction = 'open' | 'agent' | 'quit';
 
 export interface CreateOptions {
   cwd?: string;
+  /**
+   * Pre-resolved target repo (e.g. from the TUI wizard's repo picker). When
+   * set, `prepareWorktree` skips the picker; `cwd` is used only for discovery.
+   */
+  repoRoot?: string;
   store?: ConfigStore;
   repoPicker?: (repos: string[]) => Promise<string | null>;
   branchInput?: (repoRoot: string) => Promise<string | null>;
@@ -67,9 +72,29 @@ export async function prepareWorktree(
 
   let repoRoot: string | undefined;
 
+  // Auto-register the current repo for discovery (best-effort; a non-repo cwd
+  // is silently ignored). This runs regardless of `--repo` so the current repo
+  // stays discoverable next time — it never scopes/defaults the target repo.
   try {
-    repoRoot = getRepoRoot(cwd);
+    registerRepo(getRepoRoot(cwd), store);
   } catch {
+    // not in a repo — nothing to auto-register
+  }
+
+  if (options.repoRoot) {
+    // An explicit repo (CLI `--repo` or the TUI wizard's already-picked repo).
+    // The CLI value is untrusted, so resolve it against cwd and confirm it is a
+    // real git repo root before trusting it; re-resolving the wizard's
+    // already-valid root is harmless. A bad path is a hard CLI-input error, so
+    // exit(1) (like `--mode` validation) rather than falling through.
+    const resolved = path.resolve(cwd, options.repoRoot);
+    try {
+      repoRoot = getRepoRoot(resolved);
+    } catch {
+      console.error(pc.red(`✗ ${options.repoRoot} is not a git repository`));
+      process.exit(1);
+    }
+  } else {
     const repos = getRegisteredRepos(store);
     if (repos.length === 0) {
       console.error(
@@ -93,22 +118,12 @@ export async function prepareWorktree(
     const picked = await repoPicker(repos);
     if (!picked) return null;
     repoRoot = picked;
-    if (!branch) {
-      const entered = await branchInput(repoRoot);
-      if (!entered) return null;
-      branch = entered;
-    }
   }
 
-  if (!repoRoot) return null;
-
   if (!branch) {
-    const input = await clack.text({
-      message: 'Branch name:',
-      validate: (v) => (!v || v.length === 0 ? 'Required' : undefined),
-    });
-    if (clack.isCancel(input)) return null;
-    branch = input as string;
+    const entered = await branchInput(repoRoot);
+    if (!entered) return null;
+    branch = entered;
   }
 
   registerRepo(repoRoot, store);

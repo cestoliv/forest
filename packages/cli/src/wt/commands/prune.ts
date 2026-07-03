@@ -8,14 +8,12 @@ export async function runPrune(
   options: { cwd?: string; store?: ConfigStore } = {},
 ): Promise<void> {
   const { cwd = process.cwd(), store = createStore() } = options;
-  const { items, mode } = await prepareListItems({ cwd, store });
+  const { items } = await prepareListItems({ cwd, store });
 
   if (items.length === 0) {
     console.log(
       pc.dim(
-        mode === 'global'
-          ? 'No repos registered. Run `wt create` inside a repo to get started.'
-          : 'No worktrees found.',
+        'No repos registered. Run `wt create` inside a repo to get started.',
       ),
     );
     return;

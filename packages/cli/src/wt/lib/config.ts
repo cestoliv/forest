@@ -12,11 +12,12 @@ export interface RepoConfig {
   ide_open_args: string[];
   agent_command: string;
   agent_trigger_chord: string;
-  auto_refresh_minutes: number;
   agent_mode: string;
 }
 
 export interface WtConfig extends RepoConfig {
+  /** Global-only (not per-repo overridable): interactive list auto-refresh cadence. */
+  auto_refresh_minutes: number;
   repos: string[];
   repo_overrides: Record<string, Partial<RepoConfig>>;
 }
@@ -97,6 +98,7 @@ export function getEffectiveConfig(
   const {
     repos: _repos,
     repo_overrides,
+    auto_refresh_minutes: _auto_refresh_minutes,
     ...repoFields
   } = getGlobalConfig(store);
   const override = repo_overrides[repoPath] ?? {};
