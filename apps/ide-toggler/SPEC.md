@@ -241,7 +241,15 @@ duration).
   (macOS `UserDefaults`; Linux `~/.config/ide-toggler-state.json`) so the timer survives an
   app/extension restart. On load, a window's persisted `enteredAt` is restored **only if**
   its freshly computed state still matches the persisted state; otherwise it resets to now.
-  Entries for windows no longer present are pruned on save (only current ids are kept).
+  Entries for windows no longer present are pruned on save (only current ids are kept),
+  **except when the enumeration is empty** (see below).
+- **Sleep / lock resilience:** an **empty** window enumeration is treated as *temporarily
+  unavailable*, not as "every editor closed": the state-entry map is left untouched (no reset,
+  no prune, no save) and the visible rows are cleared, so on the next non-empty refresh each
+  window resumes its **real** elapsed time. This matters on macOS, where the Accessibility API
+  returns no windows while the screen is locked or the Mac is asleep — without this, every
+  timer would reset to 0 on unlock. Linux enumerates from the compositor, which stays
+  available while locked, so it is unaffected.
 - **Limitation:** keys are window ids, which are stable only while the editor window lives.
   If the **editor** restarts, the OS window id changes and the timer resets — accepted, as
   it is genuinely a new window. Only an *app/extension* restart (editor still open) keeps

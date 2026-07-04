@@ -55,6 +55,18 @@ public final class StatusAggregatorStore: ObservableObject {
         let activity = sessionSource.activity()
         let now = Date()
 
+        // An empty enumeration means the window list is temporarily unavailable (e.g. the
+        // screen is locked / the Mac is asleep, so the AX API returns nothing) — NOT that
+        // every editor closed. Preserve the per-row timer origins (no rebuild, no prune, no
+        // save) so each timer resumes its real elapsed value on unlock; just clear the visible
+        // rows/blink. A non-empty enumeration below prunes genuinely-closed windows as before.
+        if windows.isEmpty && !stateEntries.isEmpty {
+            if !blinkingWindowIDs.isEmpty { blinkingWindowIDs = [] }
+            previousStates = [:]
+            rows = []
+            return
+        }
+
         // Resolve each window's state, then carry/reset its state-entry time (the timer
         // origin). Done before ordering so `stuckDuration` and the row timer can use it.
         let currentStates = Dictionary(

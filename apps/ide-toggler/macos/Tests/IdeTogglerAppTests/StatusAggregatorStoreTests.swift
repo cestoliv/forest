@@ -110,7 +110,28 @@ final class StatusAggregatorStoreTests: XCTestCase {
                        "mismatched persisted state should reset the timer to now")
     }
 
-    func test_stateEntries_pruneVanishedWindows() {
+    func test_stateEntries_pruneVanishedWindow_whenOthersRemain() {
+        let stateStore = SpyStateStore()
+        let win = MockWindowSource([
+            EditorWindow(id: "w1", folder: "proj"),
+            EditorWindow(id: "w2", folder: "proj2"),
+        ])
+        let sess = MockSessionSource([
+            Session(pid: 1, cwd: "/x/proj", status: .busy),
+            Session(pid: 2, cwd: "/x/proj2", status: .busy),
+        ])
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess, chime: SpyChime(),
+            settings: Settings(orderMode: .alphabetical, muted: false), stateStore: stateStore)
+        store.refresh()
+        XCTAssertNotNil(stateStore.saved["w1"])
+        XCTAssertNotNil(stateStore.saved["w2"])
+        win.emit([EditorWindow(id: "w2", folder: "proj2")])  // w1 closed, w2 still open
+        XCTAssertNil(stateStore.saved["w1"], "genuinely-closed window is pruned when others remain")
+        XCTAssertNotNil(stateStore.saved["w2"])
+    }
+
+    func test_stateEntries_preservedWhenEnumerationEmpty() {
         let stateStore = SpyStateStore()
         let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
         let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])
@@ -119,9 +140,27 @@ final class StatusAggregatorStoreTests: XCTestCase {
             settings: Settings(orderMode: .alphabetical, muted: false), stateStore: stateStore)
         store.refresh()
         XCTAssertNotNil(stateStore.saved["w1"])
-        win.emit([])  // window closed
-        XCTAssertNil(stateStore.saved["w1"], "vanished window's entry should be pruned on save")
-        XCTAssertTrue(stateStore.saved.isEmpty)
+        win.emit([])  // enumeration unavailable (e.g. screen locked): must NOT wipe timers
+        XCTAssertNotNil(stateStore.saved["w1"],
+                        "empty enumeration is temporary unavailability, not a close: keep the entry")
+        XCTAssertTrue(store.rows.isEmpty, "no windows are currently visible")
+    }
+
+    func test_stateTimer_notResetWhenWindowsTemporarilyDisappear() {
+        let past = Date(timeIntervalSince1970: 1000)
+        let stateStore = SpyStateStore(seed: ["w1": StateEntry(state: .working, enteredAt: past)])
+        let win = MockWindowSource([EditorWindow(id: "w1", folder: "proj")])
+        let sess = MockSessionSource([Session(pid: 1, cwd: "/x/proj", status: .busy)])  // -> working
+        let store = StatusAggregatorStore(
+            windowSource: win, sessionSource: sess, chime: SpyChime(),
+            settings: Settings(orderMode: .alphabetical, muted: false), stateStore: stateStore)
+        store.refresh()
+        XCTAssertEqual(store.rows.first?.stateEnteredAt, past)
+        win.emit([])                                          // screen locks: AX returns nothing
+        XCTAssertNotNil(stateStore.saved["w1"], "empty enumeration must not wipe the timer")
+        win.emit([EditorWindow(id: "w1", folder: "proj")])    // unlock: same window returns
+        XCTAssertEqual(store.rows.first?.stateEnteredAt, past,
+                       "timer resumes its real value after unlock, not reset to now")
     }
 
     // MARK: - compactRow
