@@ -1,6 +1,6 @@
 {
   "name": "@cestoliv/wt",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Fast, interactive TUI to browse, create, open, and delete git worktrees across repos.",
   "repository": {
     "type": "git",
