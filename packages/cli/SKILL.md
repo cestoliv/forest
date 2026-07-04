@@ -154,11 +154,11 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | --------------------- | ---------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `worktree_path`       | `string`   | `"../"`                           | Where to place new worktrees, relative to the repo root                                                                                                                   |
 | `base_branch`         | `string`   | `"origin/main"`                   | Branch to base new worktrees on                                                                                                                                           |
-| `setup_commands`      | `string[]` | `[]`                              | Commands to run in a new worktree after creation (e.g. `["npm install"]`)                                                                                                 |
-| `teardown_commands`   | `string[]` | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`); on failure you are prompted whether to delete anyway                         |
+| `setup_commands`      | `string[]` | `[]`                              | Commands to run in a new worktree after creation (e.g. `["npm install"]`). Supports `{{…}}` templating                                                                    |
+| `teardown_commands`   | `string[]` | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`); on failure you are prompted whether to delete anyway. Supports `{{…}}` templating |
 | `ide`                 | `string`   | `"zed"`                           | IDE command to open worktrees with                                                                                                                                        |
 | `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command                                                                                                                                       |
-| `agent_command`       | `string`   | `"claude"`                        | Base command `wt agent` runs in Zed; `--permission-mode <mode>` is injected (any existing one replaced), then `<plan_prompt>` is appended single-quoted                   |
+| `agent_command`       | `string`   | `"claude"`                        | Base command `wt agent` runs in Zed; `--permission-mode <mode>` is injected (any existing one replaced). Supports `{{…}}` templating, including `{{prompt}}`: if present, the plan prompt is substituted there; if absent, `<plan_prompt>` is appended single-quoted |
 | `agent_mode`          | `string`   | `"default"`                       | Default Claude Code permission mode for `wt agent`; the `--mode` flag overrides it. One of `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`        |
 | `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
 | `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh. **Global only** — not per-repo overridable |
@@ -182,6 +182,35 @@ Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_
 }
 ```
 
+### Command templating
+
+`setup_commands`, `teardown_commands`, and `agent_command` are expanded for
+`{{…}}` placeholders just before they run. Whitespace inside the braces is
+allowed (`{{ branch }}` == `{{branch}}`) and names are case-sensitive. An
+unknown or unavailable variable is left **verbatim** (never blanked out).
+Values are inserted raw (no shell-escaping), so quote them yourself if a value
+could contain spaces.
+
+| Variable        | Expands to                              | Available in                                     |
+| --------------- | --------------------------------------- | ------------------------------------------------ |
+| `{{branch}}`    | The worktree's branch name              | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{project}}`   | The repo directory name (basename)      | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{path}}`      | Absolute path to the worktree           | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{repo_root}}` | Absolute path to the repo root          | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{prompt}}`    | The agent plan prompt                   | `agent_command` only                             |
+
+In `agent_command`, `{{prompt}}` is replaced by the plan prompt: if you include
+it, the prompt is placed exactly there (and is **not** also auto-appended). If
+you omit `{{prompt}}`, the prompt is appended automatically (single-quoted) at
+the end, as before.
+
+```json
+{
+  "agent_command": "claude --remote-control {{branch}}",
+  "setup_commands": ["direnv allow {{path}}"]
+}
+```
+
 ## Common workflows
 
 ### Create a worktree for a new feature
@@ -202,6 +231,16 @@ wt config
 #   }
 # }
 ```
+
+### Pass the branch to your agent (templating)
+
+```bash
+wt config
+# Then set:
+# "agent_command": "claude --remote-control {{branch}}"
+```
+
+`wt agent feature/login '…'` now runs `claude --remote-control feature/login …`.
 
 ### Browse all worktrees across repos
 

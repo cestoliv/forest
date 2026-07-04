@@ -22,6 +22,7 @@ import {
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
+import { buildTemplateVars, expandTemplate } from '../lib/template.js';
 import { runBranchInput, runRepoPicker } from '../lib/tui.js';
 
 export type ExistingWorktreeAction = 'open' | 'agent' | 'quit';
@@ -46,6 +47,8 @@ export interface CreateOptions {
 export interface PreparedWorktree {
   /** Whether the worktree was just created or already existed on disk. */
   status: 'created' | 'exists';
+  /** The resolved branch name (so callers can template-expand commands). */
+  branch: string;
   repoRoot: string;
   worktreePath: string;
   config: RepoConfig;
@@ -153,7 +156,7 @@ export async function prepareWorktree(
       );
       process.exit(1);
     }
-    return { status: 'exists', repoRoot, worktreePath, config };
+    return { status: 'exists', branch, repoRoot, worktreePath, config };
   }
 
   const parts = config.base_branch.split('/', 2);
@@ -192,7 +195,11 @@ export async function prepareWorktree(
 
   if (config.setup_commands.length > 0) {
     console.log(pc.dim('Running setup commands...'));
-    const result = await runCommands(config.setup_commands, worktreePath);
+    const vars = buildTemplateVars({ branch, repoRoot, worktreePath });
+    const result = await runCommands(
+      config.setup_commands.map((c) => expandTemplate(c, vars)),
+      worktreePath,
+    );
     if (!result.success) {
       console.error(
         pc.red(
@@ -204,7 +211,7 @@ export async function prepareWorktree(
     }
   }
 
-  return { status: 'created', repoRoot, worktreePath, config };
+  return { status: 'created', branch, repoRoot, worktreePath, config };
 }
 
 /**

@@ -1,12 +1,30 @@
 // src/commands/list.test.ts
 import { execSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import type { Worktree } from '../lib/git.js';
-import { prepareListItems, selectWipeCandidates } from './list.js';
+import {
+  deleteWorktree,
+  prepareListItems,
+  selectWipeCandidates,
+} from './list.js';
+
+// deleteWorktree prompts to confirm removal; auto-confirm so the teardown path
+// runs. The pure list tests don't touch clack, so a module mock is safe.
+vi.mock('@clack/prompts', () => ({
+  confirm: vi.fn(async () => true),
+  isCancel: vi.fn(() => false),
+  log: { warn: vi.fn() },
+}));
 
 let tmpDir: string;
 let repoDir: string;
@@ -100,6 +118,34 @@ describe('prepareListItems', () => {
     const result = await prepareListItems({ cwd: wtPath, store });
     const current = result.items.find((w) => w.isCurrent);
     expect(current?.path).toBe(wtPath);
+  });
+});
+
+describe('deleteWorktree (teardown templating)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('expands {{…}} template variables in teardown commands', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      // {{branch}} must be expanded before the teardown command runs.
+      { teardown_commands: [`touch ${tmpDir}/{{branch}}.teardown`] },
+      store,
+    );
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const item: Worktree = {
+      path: wtPath,
+      branch: 'feature',
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+    const removed = await deleteWorktree(item, store);
+
+    expect(removed).toBe(true);
+    expect(existsSync(path.join(tmpDir, 'feature.teardown'))).toBe(true);
   });
 });
 

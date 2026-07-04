@@ -25,16 +25,23 @@ vi.mock('../lib/ide.js', () => ({
   openIde: vi.fn(async () => true),
 }));
 
-vi.mock('../lib/zed.js', () => ({
-  AGENT_TASK_LABEL: 'wt: agent',
-  buildAgentTask: vi.fn(() => ({ label: 'wt: agent' })),
-  writeAgentTask: vi.fn(() => ({ createdDir: true, createdFile: true })),
-  ensureKeymap: vi.fn(() => true),
-  triggerChord: vi.fn(async () => ({ ok: true })),
-  cleanupAgentTask: vi.fn(),
-  openAccessibilitySettings: vi.fn(),
-  isHeadlessSession: vi.fn(() => false),
-}));
+vi.mock('../lib/zed.js', async (importOriginal) => {
+  // Use the real (pure) buildAgentTask so tests can assert the produced task
+  // command string — the command-templating wiring lives in agent.ts, so the
+  // real builder is needed to observe the final command. Everything with I/O is
+  // still stubbed out.
+  const actual = await importOriginal<typeof import('../lib/zed.js')>();
+  return {
+    AGENT_TASK_LABEL: 'wt: agent',
+    buildAgentTask: vi.fn(actual.buildAgentTask),
+    writeAgentTask: vi.fn(() => ({ createdDir: true, createdFile: true })),
+    ensureKeymap: vi.fn(() => true),
+    triggerChord: vi.fn(async () => ({ ok: true })),
+    cleanupAgentTask: vi.fn(),
+    openAccessibilitySettings: vi.fn(),
+    isHeadlessSession: vi.fn(() => false),
+  };
+});
 
 // Branch is always supplied in these tests, so clack prompts are never hit;
 // stubbing keeps the module side-effect free.
@@ -296,6 +303,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       'do stuff',
       expect.anything(),
       'default',
+      true,
     );
   });
 
@@ -306,6 +314,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       'do stuff',
       expect.anything(),
       'plan',
+      true,
     );
   });
 
@@ -316,6 +325,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       'do stuff',
       expect.anything(),
       'auto',
+      true,
     );
   });
 
@@ -330,6 +340,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       'do stuff',
       expect.anything(),
       'default',
+      true,
     );
   });
 
@@ -340,6 +351,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       'do stuff',
       expect.anything(),
       'default',
+      true,
     );
   });
 
@@ -361,6 +373,45 @@ describe('createAgentWorktree (mode resolution)', () => {
     } finally {
       exitSpy.mockRestore();
     }
+  });
+});
+
+describe('createAgentWorktree (command templating)', () => {
+  const run = async (store: ReturnType<typeof configure>) => {
+    vi.useFakeTimers();
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+  };
+
+  // The real buildAgentTask runs (see the zed mock), so its return value is the
+  // final Zed task — assert against its command string.
+  const producedCommand = (): string =>
+    vi.mocked(buildAgentTask).mock.results[0].value.command;
+
+  it('substitutes {{branch}} in agent_command', async () => {
+    await run(
+      configure({ agent_command: 'claude --remote-control {{branch}}' }),
+    );
+    expect(producedCommand()).toContain('--remote-control feature');
+  });
+
+  it('places {{prompt}} inline and does not double-append the prompt', async () => {
+    await run(configure({ agent_command: 'claude -p {{prompt}}' }));
+    const command = producedCommand();
+    expect(command).toContain('do stuff');
+    // The prompt must appear exactly once — not substituted AND appended.
+    expect(command.match(/do stuff/g)).toHaveLength(1);
+  });
+
+  it('auto-appends the prompt when agent_command has no {{prompt}}', async () => {
+    await run(configure({ agent_command: 'claude' }));
+    expect(producedCommand()).toBe(
+      "claude --permission-mode default 'do stuff'",
+    );
   });
 });
 

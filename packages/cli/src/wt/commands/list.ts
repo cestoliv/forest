@@ -22,6 +22,7 @@ import {
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
+import { buildTemplateVars, expandTemplate } from '../lib/template.js';
 import {
   runBranchInput,
   runInteractiveList,
@@ -219,7 +220,15 @@ export async function deleteWorktree(
   const config = getEffectiveConfig(item.repoRoot, store);
   if (config.teardown_commands.length > 0) {
     console.log(pc.dim('Running teardown commands...'));
-    const result = await runCommands(config.teardown_commands, item.path);
+    const vars = buildTemplateVars({
+      branch: item.branch,
+      repoRoot: item.repoRoot,
+      worktreePath: item.path,
+    });
+    const result = await runCommands(
+      config.teardown_commands.map((c) => expandTemplate(c, vars)),
+      item.path,
+    );
     if (!result.success) {
       clack.log.warn(
         `Teardown command failed: ${result.failedCommand} (exit code ${result.exitCode})`,

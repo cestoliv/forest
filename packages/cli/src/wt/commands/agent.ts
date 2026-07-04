@@ -3,6 +3,11 @@ import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import type { RepoConfig } from '../lib/config.js';
 import {
+  buildTemplateVars,
+  expandTemplate,
+  hasPromptPlaceholder,
+} from '../lib/template.js';
+import {
   AGENT_TASK_LABEL,
   buildAgentTask,
   cleanupAgentTask,
@@ -69,7 +74,13 @@ export async function createAgentWorktree(
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
 
-  const { status, config, worktreePath } = prepared;
+  const {
+    status,
+    config,
+    worktreePath,
+    repoRoot,
+    branch: resolvedBranch,
+  } = prepared;
 
   // Resolve the permission mode: --mode flag → configured agent_mode →
   // 'default'. --mode is already validated above; a misconfigured (invalid or
@@ -97,7 +108,14 @@ export async function createAgentWorktree(
     // 'agent' falls through to start the agent in the existing worktree.
   }
 
-  await startAgentInWorktree(config, worktreePath, planPrompt, mode);
+  await startAgentInWorktree(
+    config,
+    worktreePath,
+    planPrompt,
+    mode,
+    resolvedBranch,
+    repoRoot,
+  );
 }
 
 /**
@@ -111,6 +129,8 @@ async function startAgentInWorktree(
   worktreePath: string,
   planPrompt: string,
   mode: string,
+  branch: string,
+  repoRoot: string,
 ): Promise<void> {
   // The automation drives Zed specifically; fall back to the plain create
   // behaviour (open the worktree, no agent) otherwise.
@@ -133,11 +153,21 @@ async function startAgentInWorktree(
     return;
   }
 
-  const task = buildAgentTask(
+  // Expand `{{…}}` placeholders in the base command before Zed runs it. If the
+  // raw command already contains `{{prompt}}`, the plan prompt is substituted in
+  // place and buildAgentTask must NOT append it again (which would emit it
+  // twice); otherwise buildAgentTask appends it single-quoted as usual.
+  const appendPrompt = !hasPromptPlaceholder(config.agent_command);
+  const command = expandTemplate(
     config.agent_command,
+    buildTemplateVars({ branch, repoRoot, worktreePath, prompt: planPrompt }),
+  );
+  const task = buildAgentTask(
+    command,
     planPrompt,
     AGENT_TASK_LABEL,
     mode,
+    appendPrompt,
   );
   const created = writeAgentTask(worktreePath, task);
   const keymapOk = ensureKeymap(config.agent_trigger_chord, AGENT_TASK_LABEL);

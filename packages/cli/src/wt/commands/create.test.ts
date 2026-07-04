@@ -73,6 +73,25 @@ describe('createWorktree', () => {
 
     expect(existsSync(markerFile)).toBe(true);
   });
+
+  it('expands {{…}} template variables in setup commands', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        // {{branch}} must be expanded before the command runs.
+        setup_commands: [`touch ${tmpDir}/{{branch}}.marker`],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    await createWorktree('feature', { repoRoot: repoDir, store });
+
+    expect(existsSync(path.join(tmpDir, 'feature.marker'))).toBe(true);
+  });
 });
 
 describe('createWorktree (existing worktree)', () => {

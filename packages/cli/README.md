@@ -173,9 +173,9 @@ Edit with `wt config` (`wt config --path` prints the file location —
 | `ide_open_args`       | `["-n"]`                          | Extra args passed to the IDE command                                                |
 | `base_branch`         | `"origin/main"`                   | Branch new worktrees are created from                                               |
 | `worktree_path`       | `"../"`                           | Where worktrees are placed (relative to repo)                                       |
-| `setup_commands`      | `[]`                              | Commands to run in new worktrees                                                    |
-| `teardown_commands`   | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`) |
-| `agent_command`       | `"claude"`                        | Base command; `--permission-mode <mode>` injected, then prompt appended             |
+| `setup_commands`      | `[]`                              | Commands to run in new worktrees (supports [`{{…}}` templating](#command-templating)) |
+| `teardown_commands`   | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`; supports [`{{…}}` templating](#command-templating)) |
+| `agent_command`       | `"claude"`                        | Base command; `--permission-mode <mode>` injected. Prompt is substituted at `{{prompt}}` if present, else appended (supports [`{{…}}` templating](#command-templating)) |
 | `agent_mode`          | `"default"`                       | Default permission mode for `wt agent` (overridden by `--mode`)                     |
 | `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses                                    |
 | `auto_refresh_minutes`| `5`                               | How often the interactive list re-fetches worktrees (shows a "last refreshed" header); `0` disables it. **Global only** — not per-repo overridable |
@@ -193,6 +193,38 @@ Override any key per repo (except the global-only `auto_refresh_minutes`):
   }
 }
 ```
+
+### Command templating
+
+`setup_commands`, `teardown_commands`, and `agent_command` are expanded for
+`{{…}}` placeholders just before they run, so you can weave the worktree's
+branch, path, and more into them:
+
+```json
+{
+  "agent_command": "claude --remote-control {{branch}}",
+  "setup_commands": ["direnv allow {{path}}"]
+}
+```
+
+`wt agent feat/login "…"` then runs `claude --remote-control feat/login …`.
+
+| Variable        | Expands to                         | Available in                                           |
+| --------------- | ---------------------------------- | ----------------------------------------------------- |
+| `{{branch}}`    | The worktree's branch name         | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{project}}`   | The repo directory name (basename) | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{path}}`      | Absolute path to the worktree      | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{repo_root}}` | Absolute path to the repo root     | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{prompt}}`    | The agent plan prompt              | `agent_command` only                                  |
+
+In `agent_command`, `{{prompt}}` is replaced by the plan prompt: if you use it,
+the prompt is placed exactly there instead of being auto-appended. If you omit
+`{{prompt}}`, the prompt is appended automatically (single-quoted) at the end.
+
+Whitespace inside the braces is allowed (`{{ branch }}` == `{{branch}}`) and
+names are case-sensitive. An unknown or unavailable variable is left
+**verbatim** — never blanked out. Values are inserted raw (no shell-escaping),
+so quote them yourself if a value might contain spaces.
 
 ## Pre-release builds
 
