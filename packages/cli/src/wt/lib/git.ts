@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { hasMergedPullRequest } from './forge.js';
+import { hasClosedPullRequest, hasMergedPullRequest } from './forge.js';
 
 export interface Worktree {
   path: string;
@@ -299,6 +299,45 @@ export function isBranchMerged(
       : 'origin';
     // Skip the forge lookup for never-pushed branches — the common stale
     // fresh-worktree case — since they cannot have a merged PR/MR.
+    if (!hasRemoteTrackingRef(repoRoot, remote, branch)) return false;
+    return forgeCheck(repoRoot, branch, remote);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `branch`'s pull request / merge request was *closed without merging*
+ * — the fix landed some other way, so the branch is dead and safe to prune.
+ *
+ * Unlike `isBranchMerged`, this does **no** git topology checks at all (no
+ * `git cherry`, no ancestry, no tip comparison): a closed PR says nothing about
+ * whether the branch is an ancestor of base, so this can legitimately prune a
+ * branch that is *ahead* of base. The only git-side guard is the same
+ * pushed-branch check `isBranchMerged` uses — a purely-local branch that was
+ * never pushed cannot have a PR/MR, so the (network) forge call is skipped.
+ *
+ * `forgeCheck` is injectable for testing (default: real `gh`/`glab` lookup) and
+ * itself fails closed, so an unavailable/offline forge yields "not closed".
+ * Fails closed overall: any error → false, so callers never wipe on uncertainty.
+ */
+export function isBranchClosed(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+  forgeCheck: (
+    repoRoot: string,
+    branch: string,
+    remote: string,
+  ) => boolean = hasClosedPullRequest,
+): boolean {
+  try {
+    // `base_branch` is conventionally `<remote>/<branch>` (e.g. origin/main).
+    const remote = baseBranch.includes('/')
+      ? baseBranch.split('/', 1)[0]
+      : 'origin';
+    // A never-pushed branch (no remote-tracking ref) cannot have a PR/MR, so
+    // skip the network call — the common stale fresh-worktree case.
     if (!hasRemoteTrackingRef(repoRoot, remote, branch)) return false;
     return forgeCheck(repoRoot, branch, remote);
   } catch {

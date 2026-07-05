@@ -18,7 +18,7 @@ Launch the interactive TUI. Always shows worktrees across all registered repos, 
 - Arrow keys — navigate
 - `Enter` — open worktree in IDE (exits the TUI)
 - `D` — delete worktree (the main worktree is tagged `(main)` and cannot be deleted — only linked worktrees can)
-- `P` — prune all merged worktrees (per-branch confirmation)
+- `P` — prune all merged or closed-PR worktrees (per-branch confirmation)
 - `C` — create a new worktree
 - `A` — create a worktree and start an AI agent in it
 - type to search · `Backspace` — edit search
@@ -107,7 +107,8 @@ non-interactive shell it errors with a non-zero exit instead of prompting.)
 ### `wt prune`
 
 Remove every worktree whose branch has already been merged into the base
-branch (`base_branch`, default `origin/main`). Each candidate is confirmed
+branch (`base_branch`, default `origin/main`), **or** whose PR/MR was closed
+without merging (dead branch). Each candidate is confirmed
 individually — and force-confirmed when git refuses (submodules / uncommitted
 changes), exactly like a manual `d` delete. The branch itself is left intact;
 only the worktree is removed.
@@ -125,7 +126,11 @@ the **forge**: a merged PR/MR (via `gh` for GitHub, `glab` for GitLab incl.
 self-hosted, auto-detected from the remote) is the only reliable signal. If the
 forge can't answer (CLI missing, offline, branch unpushed, no merged PR/MR) the
 branch is left alone. A worktree still sitting exactly on the base commit is
-never offered. `wt prune` also best-effort fetches the remote first so detection
+never offered. Separately, a branch is pruned when its PR/MR was **closed
+without merging** — a forge-only signal that does no git ancestry checks (so it
+can prune a branch that is *ahead* of base), gated only by the same
+pushed-branch guard and failing closed on any error. `wt prune` also best-effort
+fetches the remote first so detection
 sees up-to-date refs; if the
 base ref can't be resolved (e.g. offline), nothing is removed. Always runs across
 all registered repos (each against its own `base_branch`). The TUI exposes the

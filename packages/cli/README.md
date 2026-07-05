@@ -110,7 +110,8 @@ mode**. Pressing `Esc` steps back to the previous question (answers preserved),
 or back to the list from the first step. After creating, the list **refreshes
 and stays open** (preserving your search and cursor) instead of exiting — only
 `Enter` and `Q`/`Esc` leave the TUI. `P` prunes every worktree whose branch has
-already been merged (see [`wt prune`](#prune--wt-prune) below). Note that
+already been merged or whose PR/MR was closed without merging (see
+[`wt prune`](#prune--wt-prune) below). Note that
 `a`/`c`/`d`/`p` are command keys, so they can't be typed into the search box.
 
 The main worktree is tagged `(main)` and is protected — `D` only removes linked
@@ -143,7 +144,9 @@ wt prune   # remove every merged worktree, one confirmation per branch
 
 Cleans up the worktrees you're done with: it finds every worktree whose branch
 has already been merged into the base branch (`base_branch`, default
-`origin/main`) and removes it — **always confirming each branch individually**,
+`origin/main`) **or** whose PR/MR was closed without merging (the fix landed
+another way, so the branch is dead) and removes it — **always confirming each
+branch individually**,
 and force-confirming when git refuses (submodules or uncommitted changes), just
 like a manual `D` delete. The branch itself stays; only the worktree is removed.
 Your `teardown_commands` run before each removal.
@@ -157,7 +160,14 @@ work produce — it consults the **forge**: a merged PR/MR (via `gh` for GitHub 
 only reliable signal, so a branch with unmerged work-in-progress is never
 mistaken for merged. If no forge CLI is available (or you're offline) such
 branches are simply left alone. A worktree still sitting exactly on the base
-commit is never offered. `wt prune` best-effort fetches
+commit is never offered.
+
+A branch is **also** pruned when its PR/MR was **closed without merging** — a
+pure forge signal (git can't detect it, and a closed PR doesn't imply the
+branch is an ancestor of base), so this can prune a branch that is *ahead* of
+base. The only git-side guard is the same pushed-branch check, and everything
+fails closed (offline / missing CLI / no closed PR ⇒ not pruned). `wt prune`
+best-effort fetches
 the remote first; if the base ref can't be resolved (offline, missing), it
 removes nothing. The TUI exposes the same action under the `P` key. Always runs
 across all registered repos (each against its own `base_branch`).

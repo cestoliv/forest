@@ -24,3 +24,7 @@
 
 ## Merge method
 - **Rebase** — `gh pr merge <N> --rebase`. No merge commits; branch commit replayed onto `main`.
+
+## Versioning & release
+- **ALWAYS bump `package.json` version before merging** a feat/fix PR. `publish.yml` publishes `version` to npm under `latest` on push to `main`, but **skips if that version is already on npm** — so an un-bumped PR merges without ever publishing. Bump: `npm version minor --no-git-tag-version` for `feat`, `patch` for `fix` (updates package.json + package-lock.json; no CHANGELOG in this repo). Amend the bump into the branch's single commit before merging.
+- **Prerelease testing (`publish-dev` label):** add the `publish-dev` label to a PR → `publish.yml` publishes `X.Y.Z-pr<N>.g<sha>` under a throwaway `pr-<N>` dist-tag (deliberately not `latest`), comments the exact `npm install` version on the PR, then auto-removes the label (re-add to publish again). PR checks then include `dev` (the prerelease build) and `release` (skipped off-`main`) alongside the required `check` + `GitGuardian`.

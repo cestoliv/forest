@@ -12,6 +12,7 @@ import {
 import {
   fetchRemote,
   getRepoRoot,
+  isBranchClosed,
   isBranchMerged,
   listWorktreeDirtyFiles,
   listWorktrees,
@@ -289,26 +290,31 @@ export async function deleteWorktree(
 }
 
 /**
- * Pure filter: keep only worktrees that are safe-and-merged prune candidates.
- * Excludes the current worktree, the main worktree (`isMain`), and
- * detached-HEAD worktrees; then applies the injected `isMerged` predicate.
+ * Pure filter: keep only worktrees that are safe prunable candidates (merged or
+ * closed). Excludes the current worktree, the main worktree (`isMain`), and
+ * detached-HEAD worktrees; then applies the injected `isPrunable` predicate.
  */
 export function selectWipeCandidates(
   items: Worktree[],
-  isMerged: (wt: Worktree) => boolean,
+  isPrunable: (wt: Worktree) => boolean,
 ): Worktree[] {
   return items.filter(
     (wt) =>
-      !wt.isCurrent && !wt.isMain && wt.branch !== '(detached)' && isMerged(wt),
+      !wt.isCurrent &&
+      !wt.isMain &&
+      wt.branch !== '(detached)' &&
+      isPrunable(wt),
   );
 }
 
 /**
- * Build a per-worktree "is merged into its repo's base branch" predicate.
- * Each worktree is checked against its own repo's effective `base_branch`, and
- * a worktree sitting on the base branch itself is never a candidate.
+ * Build a per-worktree "is prunable" predicate: the branch was either merged
+ * into its repo's base branch, or its PR/MR was closed without merging (dead
+ * branch). Each worktree is checked against its own repo's effective
+ * `base_branch`, and a worktree sitting on the base branch itself is never a
+ * candidate.
  */
-export function buildMergedPredicate(
+export function buildPrunePredicate(
   store: ConfigStore,
 ): (wt: Worktree) => boolean {
   return (wt) => {
@@ -316,7 +322,9 @@ export function buildMergedPredicate(
     const base = config.base_branch;
     const baseLocal = base.split('/', 2).slice(1).join('/') || base;
     if (wt.branch === base || wt.branch === baseLocal) return false;
-    return isBranchMerged(wt.repoRoot, wt.branch, base);
+    if (isBranchMerged(wt.repoRoot, wt.branch, base)) return true;
+    if (isBranchClosed(wt.repoRoot, wt.branch, base)) return true;
+    return false;
   };
 }
 
@@ -362,9 +370,9 @@ export async function wipeWorktrees(
     }
   }
 
-  const candidates = selectWipeCandidates(items, buildMergedPredicate(store));
+  const candidates = selectWipeCandidates(items, buildPrunePredicate(store));
   if (candidates.length === 0) {
-    console.log(pc.dim('No merged worktrees to wipe.'));
+    console.log(pc.dim('No merged or closed worktrees to wipe.'));
     return [];
   }
 

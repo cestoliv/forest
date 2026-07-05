@@ -79,6 +79,46 @@ export function parseMergedResult(stdout: string): boolean {
   }
 }
 
+/** argv for listing *closed-unmerged* PRs/MRs whose source/head branch is
+ * `branch`. Note: `gh pr list --state closed` returns *both* closed-unmerged
+ * and merged PRs (gh models merged as a kind of closed), so we request the
+ * `state` field and let `parseClosedResult` filter merged ones out. `glab mr
+ * list --closed` already excludes merged MRs. */
+export function buildClosedQuery(tool: ForgeTool, branch: string): string[] {
+  if (tool === 'gh') {
+    return [
+      'pr',
+      'list',
+      '--head',
+      branch,
+      '--state',
+      'closed',
+      '--json',
+      'state',
+    ];
+  }
+  return ['mr', 'list', '--closed', '--source-branch', branch, '-F', 'json'];
+}
+
+/**
+ * Parse the CLI's JSON output → `true` when at least one *closed-unmerged*
+ * PR/MR is present. `gh --state closed` includes merged PRs (with
+ * `state: 'MERGED'`), so keep only entries whose `state` is `CLOSED`
+ * (case-insensitive: gh emits `CLOSED`, glab emits `closed`; both drop
+ * `MERGED`/`merged`). Any non-array / unparseable output → `false`.
+ */
+export function parseClosedResult(stdout: string): boolean {
+  try {
+    const data = JSON.parse(stdout);
+    return (
+      Array.isArray(data) &&
+      data.some((x) => String(x?.state).toUpperCase() === 'CLOSED')
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Injectable side-effects, so the pure decision logic can be unit-tested. */
 export interface ForgeRunner {
   remoteUrl(repoRoot: string, remote: string): string;
@@ -127,6 +167,38 @@ export function hasMergedPullRequest(
     if (!tool) return false;
     return parseMergedResult(
       runner.query(repoRoot, tool, buildMergedQuery(tool, branch)),
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `branch` has a *closed-unmerged* pull request / merge request on the
+ * forge backing `remote` — i.e. its PR/MR was closed without merging (the fix
+ * landed some other way, so the branch is dead). Byte-for-byte parallel to
+ * `hasMergedPullRequest`: resolves the remote URL → host → CLI, queries it, and
+ * returns whether any closed-unmerged PR/MR exists. Fails closed (`false`) on
+ * any error: missing CLI, offline, not authenticated, unparseable remote, or no
+ * result.
+ *
+ * Note this is orthogonal to git topology — a closed PR says nothing about
+ * whether the branch is an ancestor of base, so callers must not gate this on
+ * ancestry checks.
+ */
+export function hasClosedPullRequest(
+  repoRoot: string,
+  branch: string,
+  remote = 'origin',
+  runner: ForgeRunner = defaultRunner,
+): boolean {
+  try {
+    const tool = selectForgeTool(
+      parseRemoteHost(runner.remoteUrl(repoRoot, remote)),
+    );
+    if (!tool) return false;
+    return parseClosedResult(
+      runner.query(repoRoot, tool, buildClosedQuery(tool, branch)),
     );
   } catch {
     return false;

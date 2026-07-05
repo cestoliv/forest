@@ -16,6 +16,7 @@ import {
   branchExists,
   fetchRemote,
   getRepoRoot,
+  isBranchClosed,
   isBranchMerged,
   listWorktreeDirtyFiles,
   listWorktrees,
@@ -503,5 +504,65 @@ describe('isBranchMerged', () => {
     expect(isBranchMerged(repoDir, base(), 'origin/does-not-exist')).toBe(
       false,
     );
+  });
+});
+
+describe('isBranchClosed', () => {
+  const base = (): string =>
+    execSync('git branch --show-current', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    }).trim();
+
+  // A pushed branch that is AHEAD of base: it has a commit that never landed on
+  // base (its PR was closed without merging, the fix applied elsewhere). Git
+  // cannot detect this — `isBranchMerged` returns false — so only the forge
+  // (a closed PR/MR) can decide. `pushed` simulates a remote-tracking ref,
+  // which gates the forge lookup.
+  const setupClosedAhead = (pushed = true): string => {
+    const b = base();
+    execSync('git checkout -b closed-ahead', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'c.txt'), 'closed content');
+    execSync('git add . && git commit -m "closed work"', { cwd: repoDir });
+    if (pushed) {
+      execSync('git update-ref refs/remotes/origin/closed-ahead closed-ahead', {
+        cwd: repoDir,
+      });
+    }
+    execSync(`git checkout ${b}`, { cwd: repoDir });
+    return b;
+  };
+
+  it('returns true for a pushed branch ahead of base when the forge reports a closed PR/MR', () => {
+    const b = setupClosedAhead();
+    // The branch is ahead of base and never merged, so `isBranchMerged` is
+    // false — the closed-PR path is doing the work here.
+    expect(isBranchMerged(repoDir, 'closed-ahead', b)).toBe(false);
+    expect(isBranchClosed(repoDir, 'closed-ahead', b, () => true)).toBe(true);
+  });
+
+  it('does not consult the forge for a branch that was never pushed', () => {
+    const b = setupClosedAhead(false);
+    let called = false;
+    const forge = () => {
+      called = true;
+      return true;
+    };
+    // No remote-tracking ref → it cannot have a PR/MR → skip the lookup.
+    expect(isBranchClosed(repoDir, 'closed-ahead', b, forge)).toBe(false);
+    expect(called).toBe(false);
+  });
+
+  it('returns false when the forge reports no closed PR/MR', () => {
+    const b = setupClosedAhead();
+    expect(isBranchClosed(repoDir, 'closed-ahead', b, () => false)).toBe(false);
+  });
+
+  it('fails closed (false) when the forge check throws', () => {
+    const b = setupClosedAhead();
+    const forge = () => {
+      throw new Error('forge exploded');
+    };
+    expect(isBranchClosed(repoDir, 'closed-ahead', b, forge)).toBe(false);
   });
 });
