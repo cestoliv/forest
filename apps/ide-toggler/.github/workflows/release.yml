@@ -1,0 +1,66 @@
+name: Release GNOME extension
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release and upload the asset
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Test (pure extension logic — guard before publishing)
+        working-directory: linux
+        run: node --test
+
+      - name: Inject version-name from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}" # v1.2.0 -> 1.2.0
+          cd "linux/gnome-extension/ide-toggler@cestoliv.com"
+          jq --arg v "$VERSION" '. + {"version-name": $v}' metadata.json > metadata.tmp
+          mv metadata.tmp metadata.json
+          echo "version-name set to $VERSION"
+
+      # Plain zip with metadata.json at the root is exactly what `gnome-extensions
+      # pack` produces for an extension with no schemas/po — also what EGO expects
+      # for a manual upload at https://extensions.gnome.org/upload/.
+      - name: Package extension
+        run: |
+          UUID="ide-toggler@cestoliv.com"
+          mkdir -p dist
+          ( cd "linux/gnome-extension/$UUID" && zip -qr "$GITHUB_WORKSPACE/dist/$UUID.shell-extension.zip" . )
+          unzip -l "dist/$UUID.shell-extension.zip"
+
+      # Run the EGO review checks against the packaged contents before publishing.
+      # shexli always exits 0, so gate on error-severity findings; warnings stay advisory.
+      - name: Static analysis (shexli)
+        run: |
+          python3 -m pip install -q shexli
+          # shexli needs an absolute path (it crashes on a relative one).
+          EXT="$GITHUB_WORKSPACE/linux/gnome-extension/ide-toggler@cestoliv.com"
+          shexli --format text "$EXT"
+          shexli --format json "$EXT" > shexli-report.json
+          errors=$(jq '.summary.severity_counts.error // 0' shexli-report.json)
+          echo "shexli error-level findings: $errors"
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::shexli reported $errors error-level finding(s) — see output above"
+            exit 1
+          fi
+
+      - name: Attach zip to the GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.shell-extension.zip
+          generate_release_notes: true
