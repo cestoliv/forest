@@ -1,0 +1,260 @@
+// src/lib/git.ts
+import { execFileSync } from 'node:child_process';
+import { existsSync, realpathSync, rmSync } from 'node:fs';
+import path from 'node:path';
+
+export interface Worktree {
+  path: string;
+  branch: string;
+  isCurrent: boolean;
+  repoRoot: string;
+  lastCommit?: string;
+}
+
+export function getRepoRoot(cwd = process.cwd()): string {
+  try {
+    // Resolve symlinks on cwd so git's output matches the input path on macOS
+    // (where /var/folders is a symlink to /private/var/folders)
+    const realCwd = realpathSync(cwd);
+    // The main worktree is always the first entry of `git worktree list`.
+    // `git rev-parse --show-toplevel` returns the *current* worktree instead,
+    // so running inside a linked worktree would register that worktree as a
+    // separate repo. Resolving to the main worktree keeps the repo identity
+    // stable across all of its worktrees.
+    const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: realCwd,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const firstLine = output.trim().split('\n')[0];
+    return realpathSync(firstLine.slice('worktree '.length));
+  } catch {
+    throw new Error('Not in a git repository');
+  }
+}
+
+export function listWorktrees(
+  repoRoot: string,
+  cwd = process.cwd(),
+): Worktree[] {
+  // Resolve symlinks so paths are consistent with git's canonical output
+  const realRepoRoot = realpathSync(repoRoot);
+  const realCwd = realpathSync(cwd);
+  const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+    cwd: realRepoRoot,
+    encoding: 'utf8',
+  });
+  const worktrees = parseWorktreeList(output, realRepoRoot, realCwd);
+
+  // Batch-fetch all last commit messages in a single shell invocation
+  const script = worktrees
+    .map(
+      (wt) =>
+        `(cd ${JSON.stringify(wt.path)} 2>/dev/null && git log -1 --format='%s' 2>/dev/null) || echo ''`,
+    )
+    .join('; echo "---SEP---"; ');
+
+  let commits: string[] = [];
+  try {
+    const batchOutput = execFileSync('sh', ['-c', script], {
+      encoding: 'utf8',
+      timeout: 8000,
+    });
+    commits = batchOutput.split('---SEP---').map((s) => s.trim());
+  } catch {
+    // fallback: all empty
+  }
+
+  return worktrees.map((wt, i) => ({
+    ...wt,
+    lastCommit: commits[i] ?? '',
+  }));
+}
+
+export function parseWorktreeList(
+  output: string,
+  repoRoot: string,
+  cwd: string,
+): Worktree[] {
+  return output
+    .trim()
+    .split('\n\n')
+    .map((block) => {
+      const lines = block.trim().split('\n');
+      const wtPath = lines[0].slice('worktree '.length);
+      const branchLine = lines.find((l) => l.startsWith('branch '));
+      const branch = branchLine
+        ? branchLine.replace('branch refs/heads/', '')
+        : '(detached)';
+      return {
+        path: wtPath,
+        branch,
+        isCurrent: cwd === wtPath || cwd.startsWith(wtPath + path.sep),
+        repoRoot,
+      };
+    });
+}
+
+export function addWorktree(
+  repoRoot: string,
+  worktreePath: string,
+  branch: string,
+  baseBranch?: string,
+): void {
+  if (baseBranch) {
+    execFileSync(
+      'git',
+      ['worktree', 'add', '-b', branch, worktreePath, baseBranch],
+      {
+        cwd: repoRoot,
+      },
+    );
+  } else {
+    execFileSync('git', ['worktree', 'add', worktreePath, branch], {
+      cwd: repoRoot,
+    });
+  }
+}
+
+export function removeWorktree(
+  repoRoot: string,
+  worktreePath: string,
+  force = false,
+): void {
+  try {
+    execFileSync(
+      'git',
+      ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
+      { cwd: repoRoot, stdio: 'pipe' },
+    );
+  } catch (err) {
+    if (!force) throw err;
+
+    if (existsSync(worktreePath)) {
+      rmSync(worktreePath, { recursive: true, force: true });
+    }
+    execFileSync('git', ['worktree', 'prune'], {
+      cwd: repoRoot,
+      stdio: 'pipe',
+    });
+  }
+}
+
+export function listWorktreeDirtyFiles(worktreePath: string): string[] {
+  try {
+    const out = execFileSync('git', ['status', '--short'], {
+      cwd: worktreePath,
+      encoding: 'utf8',
+    });
+    return out.split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+export function branchExists(repoRoot: string, branch: string): boolean {
+  try {
+    const local = execFileSync('git', ['branch', '--list', branch], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    }).trim();
+    if (local) return true;
+    const remote = execFileSync(
+      'git',
+      ['ls-remote', '--heads', 'origin', branch],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        timeout: 8000,
+      },
+    ).trim();
+    return remote.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `branch` has been merged into `baseBranch`, detected by patch id via
+ * `git cherry <base> <branch>`: the branch must have at least one commit and
+ * every one of them must already have a patch-equivalent in base. This catches
+ * a single-commit branch that was squash- or rebase-merged via a PR — the
+ * commit that landed on base is a different object, so the branch tip is not an
+ * ancestor of base, but its diff matches.
+ *
+ * A branch with no commits of its own (e.g. a freshly-created worktree that
+ * still points at base) produces no `git cherry` output and is reported as NOT
+ * merged, so brand-new worktrees are never offered for pruning. Plain
+ * merge-commit / fast-forward merges — where the branch's commits live verbatim
+ * in base — are intentionally not detected, matching the patch-id-based design.
+ * Fails closed: any error (missing base ref, offline, unknown branch) → false,
+ * so callers never wipe on uncertainty.
+ */
+export function isBranchMerged(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+): boolean {
+  try {
+    // `git cherry <upstream=base> <head=branch>`: '+' = commit only on the
+    // branch (unmerged), '-' = a patch-equivalent exists in base.
+    const out = execFileSync('git', ['cherry', baseBranch, branch], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    const lines = out.split('\n').filter((l) => l.trim().length > 0);
+    return lines.length > 0 && lines.every((l) => l.startsWith('-'));
+  } catch {
+    return false;
+  }
+}
+
+export function setUpstreamTracking(
+  worktreePath: string,
+  branch: string,
+  remote = 'origin',
+): void {
+  try {
+    execFileSync(
+      'git',
+      ['branch', '--set-upstream-to', `${remote}/${branch}`, branch],
+      { cwd: worktreePath, stdio: 'pipe' },
+    );
+  } catch {
+    // Silently ignore — the remote branch may not exist yet for new branches.
+  }
+}
+
+export function fetchRemote(repoRoot: string, remote = 'origin'): void {
+  execFileSync('git', ['fetch', remote], {
+    cwd: repoRoot,
+    stdio: 'pipe',
+    timeout: 30000,
+  });
+}
+
+export function resolveWorktreePath(
+  repoRoot: string,
+  worktreePath: string,
+  branch: string,
+): string {
+  const repoName = path.basename(repoRoot);
+  // Sanitize branch: replace slashes with dashes to prevent directory traversal
+  const safeBranch = branch.replace(/\//g, '-');
+  const resolved = path.resolve(
+    repoRoot,
+    worktreePath,
+    `${repoName}-${safeBranch}`,
+  );
+  const expectedParent = path.resolve(repoRoot, worktreePath);
+  if (
+    !resolved.startsWith(expectedParent + path.sep) &&
+    resolved !== expectedParent
+  ) {
+    throw new Error(
+      `Branch name "${branch}" would resolve outside the expected worktree directory`,
+    );
+  }
+  return resolved;
+}
