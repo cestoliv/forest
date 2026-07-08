@@ -7,24 +7,24 @@ import {
 } from './template.js';
 
 describe('expandTemplate', () => {
-  it('substitutes a single variable', () => {
+  it('substitutes a single variable (shell-quoted)', () => {
     expect(expandTemplate('claude {{branch}}', { branch: 'feat-x' })).toBe(
-      'claude feat-x',
+      "claude 'feat-x'",
     );
   });
 
-  it('substitutes multiple distinct variables', () => {
+  it('substitutes multiple distinct variables (shell-quoted)', () => {
     expect(
       expandTemplate('{{project}} on {{branch}}', {
         project: 'wt',
         branch: 'feat-x',
       }),
-    ).toBe('wt on feat-x');
+    ).toBe("'wt' on 'feat-x'");
   });
 
-  it('substitutes the same variable repeated', () => {
+  it('substitutes the same variable repeated (shell-quoted)', () => {
     expect(expandTemplate('{{branch}}-{{branch}}', { branch: 'x' })).toBe(
-      'x-x',
+      "'x'-'x'",
     );
   });
 
@@ -35,24 +35,50 @@ describe('expandTemplate', () => {
   });
 
   it('allows whitespace inside braces', () => {
-    expect(expandTemplate('{{ branch }}', { branch: 'x' })).toBe('x');
-    expect(expandTemplate('{{\tbranch\t}}', { branch: 'x' })).toBe('x');
+    expect(expandTemplate('{{ branch }}', { branch: 'x' })).toBe("'x'");
+    expect(expandTemplate('{{\tbranch\t}}', { branch: 'x' })).toBe("'x'");
   });
 
-  it('substitutes an empty-string value to empty', () => {
-    expect(expandTemplate('[{{branch}}]', { branch: '' })).toBe('[]');
+  it('substitutes an empty-string value to empty quotes', () => {
+    expect(expandTemplate('[{{branch}}]', { branch: '' })).toBe("['']");
   });
 
   it('leaves a string with no placeholders unchanged', () => {
     expect(expandTemplate('npm install', { branch: 'x' })).toBe('npm install');
   });
 
-  it('substitutes adjacent placeholders', () => {
-    expect(expandTemplate('{{a}}{{b}}', { a: '1', b: '2' })).toBe('12');
+  it('substitutes adjacent placeholders (each shell-quoted)', () => {
+    expect(expandTemplate('{{a}}{{b}}', { a: '1', b: '2' })).toBe("'1''2'");
   });
 
   it('is case-sensitive', () => {
     expect(expandTemplate('{{Branch}}', { branch: 'x' })).toBe('{{Branch}}');
+  });
+
+  it('neutralises shell metacharacters in a substituted value', () => {
+    // A malicious Todoist title must stay a single inert token, never break out
+    // into a second command.
+    expect(expandTemplate('echo {{branch}}', { branch: '; rm -rf ~' })).toBe(
+      "echo '; rm -rf ~'",
+    );
+    expect(expandTemplate('echo {{prompt}}', { prompt: '$(whoami)`id`' })).toBe(
+      "echo '$(whoami)`id`'",
+    );
+  });
+
+  it('escapes an embedded single quote so quoting cannot be broken out of', () => {
+    // `a'b` -> `'a'\''b'`: closes the quote, escapes the literal ', reopens.
+    expect(expandTemplate('echo {{branch}}', { branch: "a'b" })).toBe(
+      "echo 'a'\\''b'",
+    );
+    // The classic break-out attempt: value containing `'; rm -rf ~; echo '`.
+    expect(
+      expandTemplate('echo {{branch}}', { branch: "'; rm -rf ~; echo '" }),
+    ).toBe("echo ''\\''; rm -rf ~; echo '\\'''");
+  });
+
+  it('quotes a path with spaces so adjacent concatenation still works', () => {
+    expect(expandTemplate('{{path}}/sub', { path: '/a b' })).toBe("'/a b'/sub");
   });
 });
 

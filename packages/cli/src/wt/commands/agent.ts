@@ -51,15 +51,33 @@ const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Outcome of the agent flow. `started` is true only when the AI agent actually
+ * launched (the Zed trigger chord fired). It is false for every path that
+ * created/opened the worktree but never started the agent — non-Zed IDE,
+ * missing `agent_command`, Zed/keymap/Accessibility/trigger failures, or the
+ * user choosing "quit"/"open" on an existing worktree. The daemon
+ * (`runAgent`) maps `started` onto its `{ ok }` so it never mislabels a
+ * not-started task as "Agent Working".
+ */
+export interface AgentOutcome {
+  started: boolean;
+}
+
+/**
  * Create a worktree and auto-start the configured AI agent in Zed. If the
  * worktree already exists, prompt the user to open it, open-and-start the agent,
  * or quit. The agent start itself lives in `startAgentInWorktree`. macOS/Zed-specific.
+ *
+ * Returns `{ started }` — true only when the agent actually launched. The
+ * interactive CLI ignores this (the user sees the warnings directly); the
+ * daemon relies on it to distinguish a real "Agent Working" from a not-started
+ * worktree.
  */
 export async function createAgentWorktree(
   branch: string | undefined,
   planPrompt: string,
   options: CreateOptions = {},
-): Promise<void> {
+): Promise<AgentOutcome> {
   const report = options.report ?? ((m: string) => console.log(m));
   // Fail fast on an invalid explicit --mode (user input) before creating any
   // worktree, so a typo never leaves an orphan worktree behind. Throw rather
@@ -70,7 +88,7 @@ export async function createAgentWorktree(
     );
   }
   const prepared = await prepareWorktree(branch, options);
-  if (!prepared) return;
+  if (!prepared) return { started: false };
 
   const {
     status,
@@ -98,13 +116,13 @@ export async function createAgentWorktree(
   if (status === 'exists') {
     const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
     const action = await prompt(worktreePath, { allowAgent: true });
-    if (action === 'quit') return;
+    if (action === 'quit') return { started: false };
     if (action === 'open') {
       await openConfiguredIde(config, worktreePath, report);
-      return;
+      return { started: false };
     }
   }
-  await startAgentInWorktree(
+  const started = await startAgentInWorktree(
     config,
     worktreePath,
     planPrompt,
@@ -113,6 +131,7 @@ export async function createAgentWorktree(
     repoRoot,
     report,
   );
+  return { started };
 }
 
 /**
@@ -120,6 +139,11 @@ export async function createAgentWorktree(
  * `.zed/tasks.json` running the agent, ensure the global trigger chord exists,
  * open Zed, press the chord, then remove the ephemeral task to leave the repo
  * clean. Reused for freshly-created and pre-existing worktrees. macOS/Zed-only.
+ *
+ * Returns `true` only when the agent actually started (the chord fired). Every
+ * not-started path (non-Zed IDE, missing `agent_command`, Zed-open/keymap/
+ * Accessibility/trigger failure) returns `false` so the caller — and ultimately
+ * the daemon — knows no agent is running, even though the worktree exists.
  */
 async function startAgentInWorktree(
   config: RepoConfig,
@@ -129,7 +153,7 @@ async function startAgentInWorktree(
   branch: string,
   repoRoot: string,
   report: (msg: string) => void,
-): Promise<void> {
+): Promise<boolean> {
   // The automation drives Zed specifically; fall back to the plain create
   // behaviour (open the worktree, no agent) otherwise.
   if (config.ide !== 'zed') {
@@ -139,14 +163,14 @@ async function startAgentInWorktree(
       ),
     );
     await openConfiguredIde(config, worktreePath, report);
-    return;
+    return false;
   }
 
   if (!config.agent_command) {
     report(pc.red('No agent_command configured. Set it with `wt config`.'));
     // The worktree is already created; still open it so the user can work in it.
     await openConfiguredIde(config, worktreePath, report);
-    return;
+    return false;
   }
 
   // Expand `{{…}}` placeholders in the base command before Zed runs it. If the
@@ -172,7 +196,7 @@ async function startAgentInWorktree(
   if (!opened) {
     report(pc.red('✗ Could not open Zed.'));
     cleanupAgentTask(worktreePath, AGENT_TASK_LABEL, created);
-    return;
+    return false;
   }
 
   // Without the keybinding the chord does nothing, so pressing it would falsely
@@ -185,7 +209,7 @@ async function startAgentInWorktree(
           `${config.agent_trigger_chord} to start the agent manually.`,
       ),
     );
-    return;
+    return false;
   }
 
   report(pc.dim('Starting agent in Zed…'));
@@ -227,7 +251,7 @@ async function startAgentInWorktree(
   if (!result.ok) {
     // Keep .zed/tasks.json so the chord can still be pressed manually.
     reportTriggerFailure(result, config.agent_trigger_chord, report);
-    return;
+    return false;
   }
 
   report(pc.green('✓ Agent started'));
@@ -235,6 +259,7 @@ async function startAgentInWorktree(
   // remove once Zed has read it.
   await delay(CLEANUP_DELAY_MS);
   cleanupAgentTask(worktreePath, AGENT_TASK_LABEL, created);
+  return true;
 }
 
 function reportTriggerFailure(

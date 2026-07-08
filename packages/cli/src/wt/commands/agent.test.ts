@@ -396,11 +396,11 @@ describe('createAgentWorktree (command templating)', () => {
   const producedCommand = (): string =>
     vi.mocked(buildAgentTask).mock.results[0].value.command;
 
-  it('substitutes {{branch}} in agent_command', async () => {
+  it('substitutes {{branch}} in agent_command (shell-quoted)', async () => {
     await run(
       configure({ agent_command: 'claude --remote-control {{branch}}' }),
     );
-    expect(producedCommand()).toContain('--remote-control feature');
+    expect(producedCommand()).toContain("--remote-control 'feature'");
   });
 
   it('places {{prompt}} inline and does not double-append the prompt', async () => {
