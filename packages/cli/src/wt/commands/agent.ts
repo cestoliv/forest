@@ -52,20 +52,17 @@ export async function createAgentWorktree(
   planPrompt: string,
   options: CreateOptions = {},
 ): Promise<void> {
-  // Validate and normalize the mode
+  const report = options.report ?? ((m: string) => console.log(m));
   const mode = options.mode ?? 'plan';
   if (!VALID_MODES.includes(mode as AgentMode)) {
-    console.error(
-      pc.red(`Invalid mode "${mode}". Valid modes: ${VALID_MODES.join(', ')}`),
+    // Was process.exit(1) — throw so a library caller (the daemon) is not killed.
+    throw new Error(
+      `Invalid mode "${mode}". Valid modes: ${VALID_MODES.join(', ')}`,
     );
-    process.exit(1);
   }
-
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
-
   const { status, config, worktreePath } = prepared;
-
   if (status === 'exists') {
     const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
     const action = await prompt(worktreePath, { allowAgent: true });
@@ -74,10 +71,8 @@ export async function createAgentWorktree(
       await openConfiguredIde(config, worktreePath);
       return;
     }
-    // 'agent' falls through to start the agent in the existing worktree.
   }
-
-  await startAgentInWorktree(config, worktreePath, planPrompt, mode);
+  await startAgentInWorktree(config, worktreePath, planPrompt, mode, report);
 }
 
 /**
@@ -91,11 +86,12 @@ async function startAgentInWorktree(
   worktreePath: string,
   planPrompt: string,
   mode: string,
+  report: (msg: string) => void,
 ): Promise<void> {
   // The automation drives Zed specifically; fall back to the plain create
   // behaviour (open the worktree, no agent) otherwise.
   if (config.ide !== 'zed') {
-    console.warn(
+    report(
       pc.yellow(
         `⚠ Agent auto-start requires Zed (ide is "${config.ide}"). Opening without starting the agent.`,
       ),
@@ -105,9 +101,7 @@ async function startAgentInWorktree(
   }
 
   if (!config.agent_command) {
-    console.error(
-      pc.red('No agent_command configured. Set it with `wt config`.'),
-    );
+    report(pc.red('No agent_command configured. Set it with `wt config`.'));
     // The worktree is already created; still open it so the user can work in it.
     await openConfiguredIde(config, worktreePath);
     return;
@@ -124,7 +118,7 @@ async function startAgentInWorktree(
 
   const opened = await openConfiguredIde(config, worktreePath);
   if (!opened) {
-    console.error(pc.red('✗ Could not open Zed.'));
+    report(pc.red('✗ Could not open Zed.'));
     cleanupAgentTask(worktreePath, AGENT_TASK_LABEL, created);
     return;
   }
@@ -133,7 +127,7 @@ async function startAgentInWorktree(
   // look successful. ensureKeymap already printed how to add it manually; keep
   // the task file so the chord works once the user does.
   if (!keymapOk) {
-    console.warn(
+    report(
       pc.yellow(
         '⚠ Could not install the Zed keybinding (see above). In Zed, press ' +
           `${config.agent_trigger_chord} to start the agent manually.`,
@@ -142,7 +136,7 @@ async function startAgentInWorktree(
     return;
   }
 
-  console.log(pc.dim('Starting agent in Zed…'));
+  report(pc.dim('Starting agent in Zed…'));
   let result = await triggerChord(config.agent_trigger_chord);
 
   // Missing Accessibility is the common first-run blocker and is fixable: guide
@@ -153,7 +147,7 @@ async function startAgentInWorktree(
     result.reason === 'accessibility' &&
     process.stdin.isTTY
   ) {
-    console.warn(
+    report(
       pc.yellow(
         '⚠ macOS Accessibility permission is required to send the keystroke ' +
           'that starts the agent.',
@@ -180,11 +174,11 @@ async function startAgentInWorktree(
 
   if (!result.ok) {
     // Keep .zed/tasks.json so the chord can still be pressed manually.
-    reportTriggerFailure(result, config.agent_trigger_chord);
+    reportTriggerFailure(result, config.agent_trigger_chord, report);
     return;
   }
 
-  console.log(pc.green('✓ Agent started'));
+  report(pc.green('✓ Agent started'));
   // The command is already running in the terminal; the task file is safe to
   // remove once Zed has read it.
   await delay(CLEANUP_DELAY_MS);
@@ -194,9 +188,10 @@ async function startAgentInWorktree(
 function reportTriggerFailure(
   result: Extract<TriggerResult, { ok: false }>,
   chord: string,
+  report: (msg: string) => void,
 ): void {
   if (result.reason === 'unsupported') {
-    console.warn(
+    report(
       pc.yellow(
         '⚠ Agent auto-start is only supported on macOS. The worktree and Zed ' +
           `are open; press ${chord} in Zed to start the agent.`,
@@ -205,7 +200,7 @@ function reportTriggerFailure(
     return;
   }
   if (result.reason === 'accessibility') {
-    console.warn(
+    report(
       pc.yellow(
         '⚠ Agent not started (Accessibility not granted). In Zed, press ' +
           `${chord} to start it manually.`,
@@ -213,7 +208,7 @@ function reportTriggerFailure(
     );
     return;
   }
-  console.warn(
+  report(
     pc.yellow(
       `⚠ Could not auto-start the agent${result.message ? `: ${result.message}` : ''}. ` +
         `In Zed, press ${chord} to start it manually. (Over SSH, this needs the ` +

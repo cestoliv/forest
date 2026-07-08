@@ -1,0 +1,104 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      cli: ${{ steps.f.outputs.cli }}
+      ide: ${{ steps.f.outputs.ide }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: f
+        with:
+          filters: |
+            cli:
+              - 'packages/cli/**'
+            ide:
+              - 'apps/ide-toggler/**'
+
+  cli:
+    needs: changes
+    if: needs.changes.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: packages/cli/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  ide-toggler-macos:
+    needs: changes
+    if: needs.changes.outputs.ide == 'true'
+    runs-on: macos-14
+    defaults:
+      run:
+        working-directory: apps/ide-toggler/macos
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - run: swift build
+      - run: swift test
+
+  ide-toggler-linux:
+    needs: changes
+    if: needs.changes.outputs.ide == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ide-toggler/linux
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+      - run: node --test
+      - name: Static analysis (shexli)
+        run: |
+          python3 -m pip install -q shexli "tree-sitter<0.26"
+          EXT="$GITHUB_WORKSPACE/apps/ide-toggler/linux/gnome-extension/ide-toggler@cestoliv.com"
+          shexli --format text "$EXT"
+          shexli --format json "$EXT" > shexli-report.json
+          errors=$(jq '.summary.severity_counts.error // 0' shexli-report.json)
+          echo "shexli error-level findings: $errors"
+          if [ "$errors" -gt 0 ]; then
+            echo "::error::shexli reported $errors error-level finding(s)"
+            exit 1
+          fi
+
+  ci-ok:
+    # Single required status check. Passes only if no needed job failed or was
+    # cancelled; skipped area jobs (unchanged paths) count as success.
+    needs: [cli, ide-toggler-macos, ide-toggler-linux]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify no upstream job failed
+        run: |
+          r='${{ needs.cli.result }} ${{ needs.ide-toggler-macos.result }} ${{ needs.ide-toggler-linux.result }}'
+          echo "results: $r"
+          for x in $r; do
+            if [ "$x" = "failure" ] || [ "$x" = "cancelled" ]; then
+              echo "::error::a required job did not pass ($x)"; exit 1
+            fi
+          done
+          echo "all good"

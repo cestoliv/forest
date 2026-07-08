@@ -2,7 +2,7 @@ name: Release GNOME extension
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["ide-toggler-v*"]
 
 permissions:
   contents: write # create the GitHub Release and upload the asset
@@ -22,13 +22,13 @@ jobs:
           python-version: "3.12"
 
       - name: Test (pure extension logic — guard before publishing)
-        working-directory: linux
+        working-directory: apps/ide-toggler/linux
         run: node --test
 
       - name: Inject version-name from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}" # v1.2.0 -> 1.2.0
-          cd "linux/gnome-extension/ide-toggler@cestoliv.com"
+          VERSION="${GITHUB_REF_NAME#ide-toggler-v}" # ide-toggler-v1.2.0 -> 1.2.0
+          cd "apps/ide-toggler/linux/gnome-extension/ide-toggler@cestoliv.com"
           jq --arg v "$VERSION" '. + {"version-name": $v}' metadata.json > metadata.tmp
           mv metadata.tmp metadata.json
           echo "version-name set to $VERSION"
@@ -40,7 +40,7 @@ jobs:
         run: |
           UUID="ide-toggler@cestoliv.com"
           mkdir -p dist
-          ( cd "linux/gnome-extension/$UUID" && zip -qr "$GITHUB_WORKSPACE/dist/$UUID.shell-extension.zip" . )
+          ( cd "apps/ide-toggler/linux/gnome-extension/$UUID" && zip -qr "$GITHUB_WORKSPACE/dist/$UUID.shell-extension.zip" . )
           unzip -l "dist/$UUID.shell-extension.zip"
 
       # Run the EGO review checks against the packaged contents before publishing.
@@ -49,7 +49,7 @@ jobs:
         run: |
           python3 -m pip install -q shexli
           # shexli needs an absolute path (it crashes on a relative one).
-          EXT="$GITHUB_WORKSPACE/linux/gnome-extension/ide-toggler@cestoliv.com"
+          EXT="$GITHUB_WORKSPACE/apps/ide-toggler/linux/gnome-extension/ide-toggler@cestoliv.com"
           shexli --format text "$EXT"
           shexli --format json "$EXT" > shexli-report.json
           errors=$(jq '.summary.severity_counts.error // 0' shexli-report.json)

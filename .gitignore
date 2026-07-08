@@ -6,3 +6,18 @@ __pycache__/
 .DS_Store
 .claude/
 .superpowers/
+
+# Swift Package Manager (apps/ide-toggler/macos)
+.swiftpm/
+Package.resolved
+
+# Generated app bundle (produced by apps/ide-toggler/macos/scripts/make_app.sh)
+IdeToggler.app/
+
+# Xcode
+*.xcodeproj
+*.xcworkspace
+DerivedData/
+
+# Zed editor settings
+.zed/

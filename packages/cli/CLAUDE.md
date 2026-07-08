@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 npm run dev          # Run CLI without building (tsx)
-npm run build        # Compile to dist/ and chmod +x dist/cli.js
+npm run build        # Compile to dist/ and chmod +x dist/wt.js dist/spawner.js
 npm test             # Run all tests (vitest, single-fork, serial)
 npm run typecheck    # Type-check only (tsc --noEmit)
 npm run lint         # Biome lint check
@@ -16,7 +16,7 @@ npm run format       # Biome auto-format
 Run a single test file:
 
 ```bash
-npx vitest run src/lib/git.test.ts
+npx vitest run src/wt/lib/git.test.ts
 ```
 
 After building, the CLI is available as `wt` (via the `bin` field in package.json).
@@ -33,9 +33,10 @@ After building, the CLI is available as `wt` (via the `bin` field in package.jso
 
 ## Distribution
 
-The package is published to npm as **`@cestoliv/wt`** (scoped, public —
+The package is published to npm as **`@cestoliv/forest`** (scoped, public —
 `publishConfig.access: public`). The CLI command stays `wt` (from the `bin`
-field key, independent of the package name).
+field key, independent of the package name); the same package also ships the
+`agent-spawner` bin (see `## agent-spawner` below).
 
 - `dist/` is **gitignored** (not committed). The `files` field ships `dist/`
   and `SKILL.md`. `prepublishOnly` runs `npm run build` so the published
@@ -47,19 +48,13 @@ field key, independent of the package name).
 - **Do not add a `prepare`/`prepack`/`postinstall` script.** Use
   `prepublishOnly` (publish-only, never runs on install) for build-on-publish.
 
-Two workflows:
+CI and publishing are now handled by the root-level, path-aware workflows —
+see the root `CLAUDE.md`'s "Release model" for the full description
+(`.github/workflows/ci.yml` gates PRs/`main` for the areas that changed;
+`.github/workflows/publish-cli.yml` publishes `packages/cli` to npm on push to
+`main`, plus the `publish-dev` PR-label prerelease flow).
 
-- `.github/workflows/ci.yml` — quality gate on PRs and `main`: `npm run lint`,
-  `npm run typecheck` (`tsc --noEmit`), `npm test`. No publishing.
-- `.github/workflows/publish.yml` — publishing only (no lint/test; CI covers
-  that). Push to `main` → publish `version` under `latest` (skipped if already
-  on npm — bump `version` to release). Adding the `publish-dev` label to a PR →
-  publish a unique prerelease `X.Y.Z-pr<N>.g<sha>` under a throwaway `pr-<N>`
-  dist-tag (deliberately **not** `latest` or a pretend-stable `dev` channel);
-  the exact version is posted as a PR comment, then the label is removed
-  (re-add it to publish again). The `publish-dev` label must exist in the repo.
-
-CLI version: `src/cli.ts` uses `__WT_VERSION__`, injected at build time by
+CLI version: `src/wt/cli.ts` uses `__VERSION__`, injected at build time by
 `tsup` (`define`) from `package.json` `version` (declared in
 `src/globals.d.ts`). Never hardcode the version; `wt --version` always
 reflects the published version (prereleases included, since `prepublishOnly`
@@ -70,7 +65,7 @@ Publishing uses **npm Trusted Publishers (OIDC)** — no `NPM_TOKEN` secret.
 The workflow grants `id-token: write` and uses Node 24 (npm ≥ 11.5.1 required;
 provenance is automatic for this public repo/package). A trusted publisher must
 be configured on the package's npmjs.com settings (org `cestoliv`, repo
-`worktrees`, workflow file `publish.yml`). Because that page only exists once
+`forest`, workflow file `publish-cli.yml`). Because that page only exists once
 the package does, the **first publish is a one-time manual bootstrap**
 (`npm publish --access public` after `npm login`); all later publishes are
 tokenless via the workflow.
@@ -83,9 +78,9 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
 
 ### Entry point & commands
 
-`src/cli.ts` registers Commander commands and uses **dynamic imports** for each:
+`src/wt/cli.ts` registers Commander commands and uses **dynamic imports** for each:
 
-- `wt` (default, no subcommand) → `src/commands/list.ts` — interactive TUI.
+- `wt` (default, no subcommand) → `src/wt/commands/list.ts` — interactive TUI.
   The `C` (create) and `A` (agent) shortcuts work in **both** repo and global
   mode and are built as back-navigable wizards via `runWizard` (a generic
   array-of-steps + index runner in `tui.ts`: each step resolves `true` to
@@ -111,7 +106,7 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   `buildMergedPredicate` (per-repo `base_branch` via `getEffectiveConfig` +
   `isBranchMerged`), and `wipeWorktrees` (best-effort fetch → select → delete
   each with per-branch confirmation; the `P` key's `onWipe` handler).
-- `wt create [branch]` → `src/commands/create.ts`. The full create flow lives
+- `wt create [branch]` → `src/wt/commands/create.ts`. The full create flow lives
   here as reusable exports: `prepareWorktree` (repo/branch resolution +
   worktree creation + `setup_commands`) and `openConfiguredIde` (open the
   worktree in the configured IDE + report). `prepareWorktree` returns a
@@ -121,22 +116,22 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   tests as `CreateOptions.existingWorktreePrompt`); a path that exists but is
   not a worktree is a hard error. `createWorktree` is
   `prepareWorktree` + (on `exists`) prompt + `openConfiguredIde`.
-- `wt agent <branch> <plan_prompt>` → `src/commands/agent.ts` — the AI-first
+- `wt agent <branch> <plan_prompt>` → `src/wt/commands/agent.ts` — the AI-first
   path. Reuses `prepareWorktree` + `openConfiguredIde` (no duplicated create
   logic) and extends them by auto-starting the configured AI agent in Zed via
   the extracted `startAgentInWorktree` helper (macOS-only automation via
-  `src/lib/zed.ts`); falls back to a plain `openConfiguredIde` when
+  `src/wt/lib/zed.ts`); falls back to a plain `openConfiguredIde` when
   Zed/`agent_command` is unavailable. On an existing worktree it prompts with
   `promptExistingWorktree` (the agent option included) and reuses
   `startAgentInWorktree` for the "open and start agent" choice.
-- `wt prune` → `src/commands/prune.ts` — reuses `prepareListItems` (repo or
+- `wt prune` → `src/wt/commands/prune.ts` — reuses `prepareListItems` (repo or
   global) then `wipeWorktrees(items, store, { fetch: true })` from `list.ts`;
   no duplicated delete logic. Removes every worktree whose branch is merged into
   its repo's `base_branch`, one per-branch confirmation each.
-- `wt config [--path]` → `src/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
-- `wt skill` → `src/commands/skill.ts` — prints the bundled SKILL.md to stdout
+- `wt config [--path]` → `src/wt/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
+- `wt skill` → `src/wt/commands/skill.ts` — prints the bundled SKILL.md to stdout
 
-### Library layer (`src/lib/`)
+### Library layer (`src/wt/lib/`)
 
 | File          | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -183,3 +178,81 @@ After any change that affects commands, architecture, config schema, testing con
 ## Module System
 
 The project is ESM-only (`"type": "module"`, `moduleResolution: NodeNext`). All internal imports must use `.js` extensions even when importing `.ts` source files.
+
+## agent-spawner
+
+The rest of this file is `wt`'s original guidance, kept intact above. This
+section is agent-spawner's — merged in from its own repo's CLAUDE.md when the
+two tools were combined into this package (see the root `CLAUDE.md` for the
+"one package, two bins" model). agent-spawner's source lives in `src/spawner/`
+(`commands/` for the CLI subcommands, `lib/` for the daemon logic), separate
+from `wt`'s `src/wt/`, but both build from this same `package.json` (see
+`## Commands` and `## Distribution` above — same lint/test/build tooling
+applies to both).
+
+agent-spawner is a macOS daemon that polls Todoist for tasks labelled `Agent
+Ready` and dispatches each one to a `wt agent` worktree + Zed session, routed
+to the correct local repo by Todoist project + label. After dispatching it
+swaps the label to `Agent Working` so the task is processed once; on failure
+or when no routing rule matches, it swaps to `Agent Error` with an
+explanatory comment and leaves `Agent Ready` so it can be retried.
+agent-spawner does not yet have its own section in `packages/cli/README.md`
+(that file currently only documents `wt`); its CLI subcommands, reproduced
+here from its original README:
+
+- `agent-spawner run` — foreground (use this first to grant Accessibility)
+- `agent-spawner install` / `agent-spawner uninstall` — launchd auto-start on login
+- `agent-spawner logs` — tail the log
+- `agent-spawner config [--path]` — open config in `$EDITOR`, or print its path
+
+Config: a Todoist API token (`TODOIST_API_TOKEN` env var or `token` in
+config), the three label ids (`ready`/`working`/`error`), and ordered routing
+`rules` (project + optional label ids → repo path; first match wins, see
+`src/spawner/lib/router.ts`). `packages/cli/config.example.json` has a
+starting point. Every `pollIntervalSeconds` (default 600) it fetches `Agent
+Ready` tasks, picks the oldest not already Working/Error, resolves a repo via
+the rules, and dispatches. The prompt sent to `wt agent` is built from
+`promptTemplate` with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, and
+`{{projectId}}` placeholders.
+
+### Dispatch is now in-process, not a subprocess on `$PATH`
+
+Before the merge into this monorepo, agent-spawner was a standalone package
+and `spawnWtAgent` (`src/spawner/lib/dispatch.ts`) shelled out to a `wt`
+binary that had to be separately installed and resolved on `$PATH`, running
+`wt agent --repo <path> <branch> <prompt>` with no `cwd` (the daemon has no
+TTY, so `--repo` was required to skip `wt`'s interactive repo picker). That
+setup had real version-skew risk: `agent-spawner` and `wt` were installed and
+updated independently, and a `wt` release that lagged behind (or shipped
+without the `--repo` flag agent-spawner depended on) would silently break
+dispatch with `error: unknown option '--repo'`.
+
+Now that both binaries build from this one package, `dispatch.ts` calls
+`runAgent` from `../../wt/agent-api.js` (`packages/cli/src/wt/agent-api.ts`)
+**directly, in-process** — no subprocess, no `$PATH` lookup, no version skew
+between the daemon and `wt`'s agent flow (they're always the exact same
+build). `runAgent({ repoPath, branch, prompt, mode? })` resolves the target
+repo from `repoPath` (still no interactive picker — the daemon still has no
+TTY), runs the worktree + agent automation, and returns `{ ok, output }`; it
+never calls `process.exit`, so a throw inside `wt agent`'s flow becomes a
+clean `{ ok: false }` the daemon can act on (label the task `Agent Error` with
+`output` as the comment) instead of crashing the process. The routing rule's
+`path` must still be an absolute (or `~`-expandable) path to the repo root —
+that part of the routing contract didn't change.
+
+agent-spawner's original repo also had a `docs/WT_INTEGRATION.md` describing
+the old subprocess mechanism above (the `--repo` requirement, the PATH/version
+gotchas). That doc was **not** carried into this monorepo — the mechanism it
+described no longer applies now that dispatch is in-process via `runAgent`.
+If similar non-obvious findings accumulate for agent-spawner going forward,
+they belong in a topic doc under this repo's root `docs/` (see root
+`CLAUDE.md`'s "Where docs live"), not resurrected from the old file as-is.
+
+### Testing
+
+Tests live alongside source as `*.test.ts` under `src/spawner/` — e.g.
+`lib/dispatch.test.ts`, `lib/router.test.ts`, `lib/template.test.ts`,
+`lib/todoist.test.ts`, `lib/launchd.test.ts`, `lib/loop.test.ts`,
+`lib/branch.test.ts`, `lib/config.test.ts`, `lib/smoke.test.ts`. Same vitest
+config as `wt` (single-fork, serial — see `## Testing Conventions` above);
+there is no separate test command for agent-spawner, `npm test` runs both.

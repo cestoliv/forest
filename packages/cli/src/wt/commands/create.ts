@@ -34,6 +34,8 @@ export interface CreateOptions {
     opts: { allowAgent: boolean },
   ) => Promise<ExistingWorktreeAction>;
   mode?: string;
+  /** Sink for human-readable progress/error lines. Defaults to console. */
+  report?: (msg: string) => void;
 }
 
 export interface PreparedWorktree {
@@ -80,12 +82,9 @@ export async function prepareWorktree(
 
     // Guard against non-TTY contexts (e.g., pipes, non-interactive shells)
     if (!process.stdin.isTTY) {
-      console.error(
-        pc.red(
-          'Interactive repo picker requires a TTY. Please run this command in an interactive terminal.',
-        ),
+      throw new Error(
+        'Interactive repo picker requires a TTY. Please run this command in an interactive terminal.',
       );
-      process.exit(1);
     }
 
     const picked = await repoPicker(repos);
@@ -129,12 +128,9 @@ export async function prepareWorktree(
       (wt) => wt.path === worktreePath,
     );
     if (!isWorktree) {
-      console.error(
-        pc.red(
-          `Path already exists but is not a git worktree: ${worktreePath}`,
-        ),
+      throw new Error(
+        `Path already exists but is not a git worktree: ${worktreePath}`,
       );
-      process.exit(1);
     }
     return { status: 'exists', repoRoot, worktreePath, config };
   }
@@ -169,13 +165,9 @@ export async function prepareWorktree(
     console.log(pc.dim('Running setup commands...'));
     const result = await runCommands(config.setup_commands, worktreePath);
     if (!result.success) {
-      console.error(
-        pc.red(
-          `✗ Setup failed: ${result.failedCommand} (exit code ${result.exitCode})`,
-        ),
+      throw new Error(
+        `Setup failed: ${result.failedCommand} (exit code ${result.exitCode})\nWorktree left at ${worktreePath} for inspection`,
       );
-      console.error(pc.dim(`Worktree left at ${worktreePath} for inspection`));
-      process.exit(1);
     }
   }
 
@@ -184,16 +176,15 @@ export async function prepareWorktree(
 
 /**
  * Prompt the user about a worktree that already exists. `wt create` offers
- * open-or-quit; `wt agent` additionally offers starting the agent. Falls back to
- * a clear error + exit(1) in non-interactive contexts so scripts still fail.
+ * open-or-quit; `wt agent` additionally offers starting the agent. In
+ * non-interactive contexts, throws a clear error so scripts still fail.
  */
 export async function promptExistingWorktree(
   worktreePath: string,
   opts: { allowAgent: boolean },
 ): Promise<ExistingWorktreeAction> {
   if (!process.stdin.isTTY) {
-    console.error(pc.red(`Worktree path already exists: ${worktreePath}`));
-    process.exit(1);
+    throw new Error(`Worktree path already exists: ${worktreePath}`);
   }
 
   const choice = await clack.select({

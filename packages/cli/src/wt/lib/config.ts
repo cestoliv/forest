@@ -52,10 +52,9 @@ export function createStore(cwd?: string): ConfigStore {
     });
   } catch (error) {
     const configPath = getConfigFilePath(cwd);
-    console.error(
+    throw new Error(
       `Error reading config file: ${configPath}\n${error instanceof Error ? error.message : error}`,
     );
-    process.exit(1);
   }
 }
 

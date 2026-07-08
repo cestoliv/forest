@@ -13,10 +13,12 @@ prompt.
 ## Install
 
 ```bash
-npm install -g @cestoliv/wt   # also the update command
+npm install -g @cestoliv/forest   # provides `wt` and `agent-spawner`
 ```
 
-Requires Node.js 20+ and Git. The command is `wt`.
+Requires Node.js 20+ and Git. The command is `wt`. This package also installs
+the `agent-spawner` daemon (a Todoist-driven dispatcher for `wt agent`); see
+the root README / root `CLAUDE.md` for its docs.
 
 ## Let your AI assistant set it up
 

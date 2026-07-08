@@ -5,7 +5,7 @@ const program = new Command();
 program
   .name('wt')
   .description('Git worktree manager')
-  .version(__WT_VERSION__)
+  .version(__VERSION__)
   .action(async () => {
     const { runList } = await import('./commands/list.js');
     await runList();
@@ -66,4 +66,9 @@ program
     printSkill();
   });
 
-await program.parseAsync(process.argv);
+try {
+  await program.parseAsync(process.argv);
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
+  process.exitCode = 1;
+}

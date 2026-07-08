@@ -136,10 +136,6 @@ describe('createWorktree (existing worktree)', () => {
     // A plain directory at the worktree path that git knows nothing about.
     mkdirSync(path.join(tmpDir, 'my-repo-feature'), { recursive: true });
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(process, 'exit').mockImplementation((code) => {
-      throw new Error(`process.exit(${code})`);
-    });
     const prompt = vi.fn(async () => 'open' as const);
 
     await expect(
@@ -148,22 +144,14 @@ describe('createWorktree (existing worktree)', () => {
         store,
         existingWorktreePrompt: prompt,
       }),
-    ).rejects.toThrow('process.exit(1)');
+    ).rejects.toThrow(/not a git worktree/);
 
     expect(prompt).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('not a git worktree'),
-    );
   });
 
   it('exits with error when the worktree exists and TTY is not available', async () => {
     const store = configureEcho();
     await createWorktree('feature', { cwd: repoDir, store });
-
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(process, 'exit').mockImplementation((code) => {
-      throw new Error(`process.exit(${code})`);
-    });
 
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = false;
@@ -172,10 +160,7 @@ describe('createWorktree (existing worktree)', () => {
       // runs and hits its non-TTY guard.
       await expect(
         createWorktree('feature', { cwd: repoDir, store }),
-      ).rejects.toThrow('process.exit(1)');
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('already exists'),
-      );
+      ).rejects.toThrow(/already exists/);
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }
@@ -327,17 +312,9 @@ describe('createWorktree (setup failure)', () => {
       store,
     );
 
-    const exitSpy = vi
-      .spyOn(process, 'exit')
-      .mockImplementation(() => undefined as never);
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    await createWorktree('feature', { cwd: repoDir, store });
-
-    expect(exitSpy).toHaveBeenCalledWith(1);
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Setup failed'),
-    );
+    await expect(
+      createWorktree('feature', { cwd: repoDir, store }),
+    ).rejects.toThrow(/Setup failed/);
   });
 });
 
@@ -348,18 +325,12 @@ describe('createWorktree (outside repo)', () => {
     const store = createStore(path.join(tmpDir, 'config'));
     registerRepo(repoDir, store);
 
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.spyOn(process, 'exit').mockImplementation((code) => {
-      throw new Error(`process.exit(${code})`);
-    });
-
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = false;
     try {
       await expect(
         createWorktree('feature', { cwd: tmpdir(), store }),
-      ).rejects.toThrow('process.exit(1)');
-      expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('TTY'));
+      ).rejects.toThrow(/TTY/);
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }

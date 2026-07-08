@@ -124,14 +124,17 @@ describe('createAgentWorktree', () => {
     expect(triggerChord).not.toHaveBeenCalled();
   });
 
-  it('errors but still opens Zed when agent_command is empty', async () => {
+  it('reports (not console.error) but still opens Zed when agent_command is empty', async () => {
     const store = configure({ agent_command: '' });
+    const lines: string[] = [];
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      cwd: repoDir,
+      store,
+      report: (m) => lines.push(m),
+    });
 
-    expect(console.error).toHaveBeenCalledWith(
-      expect.stringContaining('No agent_command'),
-    );
+    expect(lines.join('\n')).toContain('No agent_command');
     expect(openIde).toHaveBeenCalledWith('zed', [], expect.any(String));
     expect(writeAgentTask).not.toHaveBeenCalled();
   });
@@ -158,11 +161,26 @@ describe('createAgentWorktree', () => {
       message: 'boom',
     });
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
-
+    const lines: string[] = [];
+    await createAgentWorktree('feature', 'do stuff', {
+      cwd: repoDir,
+      store,
+      report: (m) => lines.push(m),
+    });
     expect(triggerChord).toHaveBeenCalled();
     expect(cleanupAgentTask).not.toHaveBeenCalled();
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('press'));
+    expect(lines.join('\n')).toContain('press');
+  });
+
+  it('throws on an invalid mode instead of exiting', async () => {
+    const store = configure();
+    await expect(
+      createAgentWorktree('feature', 'do stuff', {
+        cwd: repoDir,
+        store,
+        mode: 'nope',
+      }),
+    ).rejects.toThrow(/Invalid mode/);
   });
 
   it('guides through Accessibility, then stops cleanly when the user declines', async () => {
