@@ -3,6 +3,11 @@ import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import type { RepoConfig } from '../lib/config.js';
 import {
+  buildTemplateVars,
+  expandTemplate,
+  hasPromptPlaceholder,
+} from '../lib/template.js';
+import {
   AGENT_TASK_LABEL,
   buildAgentTask,
   cleanupAgentTask,
@@ -32,6 +37,9 @@ export const VALID_MODES = [
 
 type AgentMode = (typeof VALID_MODES)[number];
 
+const isValidMode = (mode: string): mode is AgentMode =>
+  VALID_MODES.includes(mode as AgentMode);
+
 /**
  * Delay after the chord fires before removing the ephemeral .zed task. Kept
  * generous so a slow machine or cold Zed start has read and spawned the task
@@ -53,16 +61,40 @@ export async function createAgentWorktree(
   options: CreateOptions = {},
 ): Promise<void> {
   const report = options.report ?? ((m: string) => console.log(m));
-  const mode = options.mode ?? 'plan';
-  if (!VALID_MODES.includes(mode as AgentMode)) {
-    // Was process.exit(1) — throw so a library caller (the daemon) is not killed.
+  // Fail fast on an invalid explicit --mode (user input) before creating any
+  // worktree, so a typo never leaves an orphan worktree behind. Throw rather
+  // than process.exit so a library caller (the daemon) is not killed.
+  if (options.mode !== undefined && !isValidMode(options.mode)) {
     throw new Error(
-      `Invalid mode "${mode}". Valid modes: ${VALID_MODES.join(', ')}`,
+      `Invalid mode "${options.mode}". Valid modes: ${VALID_MODES.join(', ')}`,
     );
   }
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
-  const { status, config, worktreePath } = prepared;
+
+  const {
+    status,
+    config,
+    worktreePath,
+    repoRoot,
+    branch: resolvedBranch,
+  } = prepared;
+
+  // Resolve the permission mode: --mode flag → configured agent_mode →
+  // 'default'. --mode is already validated above; a misconfigured (invalid or
+  // empty) agent_mode shouldn't orphan the freshly-created worktree or crash,
+  // so warn and fall back to 'default' instead of exiting.
+  let mode = options.mode ?? config.agent_mode ?? 'default';
+  if (!isValidMode(mode)) {
+    console.warn(
+      pc.yellow(
+        `⚠ Invalid agent_mode "${mode}" in config; using "default". ` +
+          `Valid modes: ${VALID_MODES.join(', ')}`,
+      ),
+    );
+    mode = 'default';
+  }
+
   if (status === 'exists') {
     const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
     const action = await prompt(worktreePath, { allowAgent: true });
@@ -72,7 +104,15 @@ export async function createAgentWorktree(
       return;
     }
   }
-  await startAgentInWorktree(config, worktreePath, planPrompt, mode, report);
+  await startAgentInWorktree(
+    config,
+    worktreePath,
+    planPrompt,
+    mode,
+    resolvedBranch,
+    repoRoot,
+    report,
+  );
 }
 
 /**
@@ -86,6 +126,8 @@ async function startAgentInWorktree(
   worktreePath: string,
   planPrompt: string,
   mode: string,
+  branch: string,
+  repoRoot: string,
   report: (msg: string) => void,
 ): Promise<void> {
   // The automation drives Zed specifically; fall back to the plain create
@@ -107,11 +149,21 @@ async function startAgentInWorktree(
     return;
   }
 
-  const task = buildAgentTask(
+  // Expand `{{…}}` placeholders in the base command before Zed runs it. If the
+  // raw command already contains `{{prompt}}`, the plan prompt is substituted in
+  // place and buildAgentTask must NOT append it again (which would emit it
+  // twice); otherwise buildAgentTask appends it single-quoted as usual.
+  const appendPrompt = !hasPromptPlaceholder(config.agent_command);
+  const command = expandTemplate(
     config.agent_command,
+    buildTemplateVars({ branch, repoRoot, worktreePath, prompt: planPrompt }),
+  );
+  const task = buildAgentTask(
+    command,
     planPrompt,
     AGENT_TASK_LABEL,
     mode,
+    appendPrompt,
   );
   const created = writeAgentTask(worktreePath, task);
   const keymapOk = ensureKeymap(config.agent_trigger_chord, AGENT_TASK_LABEL);

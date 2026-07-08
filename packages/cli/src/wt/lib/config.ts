@@ -12,10 +12,12 @@ export interface RepoConfig {
   ide_open_args: string[];
   agent_command: string;
   agent_trigger_chord: string;
-  auto_refresh_minutes: number;
+  agent_mode: string;
 }
 
 export interface WtConfig extends RepoConfig {
+  /** Global-only (not per-repo overridable): interactive list auto-refresh cadence. */
+  auto_refresh_minutes: number;
   repos: string[];
   repo_overrides: Record<string, Partial<RepoConfig>>;
 }
@@ -27,9 +29,10 @@ export const DEFAULT_CONFIG: WtConfig = {
   teardown_commands: [],
   ide: 'zed',
   ide_open_args: ['-n'],
-  agent_command: 'claude --permission-mode plan',
+  agent_command: 'claude',
   agent_trigger_chord: 'ctrl-shift-cmd-c',
   auto_refresh_minutes: 5,
+  agent_mode: 'default',
   repos: [],
   repo_overrides: {},
 };
@@ -94,6 +97,7 @@ export function getEffectiveConfig(
   const {
     repos: _repos,
     repo_overrides,
+    auto_refresh_minutes: _auto_refresh_minutes,
     ...repoFields
   } = getGlobalConfig(store);
   const override = repo_overrides[repoPath] ?? {};

@@ -55,7 +55,7 @@ export function reconcileSelectedIndex(
 }
 
 export interface ListLayout {
-  /** Pinned top region (global-mode notice + search query line). */
+  /** Pinned top region (search query line + optional refresh status). */
   header: string[];
   /** Scrollable region (repo group headers + worktree item lines). */
   body: string[];
@@ -78,19 +78,12 @@ export function buildListLayout(
   items: Worktree[],
   selectedIndex: number,
   query: string,
-  mode: 'repo' | 'global',
   lastRefresh: Date | null = null,
   intervalMinutes = 0,
 ): ListLayout {
   const header: string[] = [];
   if (lastRefresh && intervalMinutes > 0) {
     header.push(pc.dim(formatRefreshStatus(lastRefresh, intervalMinutes)));
-    header.push('');
-  }
-  if (mode === 'global') {
-    header.push(
-      pc.dim('ℹ Not in a git repository — showing all registered worktrees'),
-    );
     header.push('');
   }
   header.push(pc.cyan(`> ${query}_`));
@@ -106,7 +99,9 @@ export function buildListLayout(
       const cursor = i === selectedIndex ? pc.cyan('▶') : ' ';
       const branchLabel = item.isCurrent
         ? pc.dim(`${item.branch} (current)`)
-        : pc.white(item.branch);
+        : item.isMain
+          ? pc.dim(`${item.branch} (main)`)
+          : pc.white(item.branch);
       const pathLabel = pc.dim(shortenPath(item.path));
       body.push(`  ${cursor} ${branchLabel}  ${pathLabel}`);
       if (item.lastCommit) {
@@ -185,7 +180,6 @@ export function renderList(
   items: Worktree[],
   selectedIndex: number,
   query: string,
-  mode: 'repo' | 'global',
   rows: number = process.stdout.rows ?? 24,
   lastRefresh: Date | null = null,
   intervalMinutes = 0,
@@ -194,7 +188,6 @@ export function renderList(
     items,
     selectedIndex,
     query,
-    mode,
     lastRefresh,
     intervalMinutes,
   );
@@ -238,7 +231,7 @@ export function renderRepoPicker(
   query: string,
 ): string {
   const lines: string[] = [];
-  lines.push(pc.dim('ℹ Not in a git repository — select a repo to create in'));
+  lines.push(pc.dim('ℹ Select a repo'));
   lines.push('');
   lines.push(pc.cyan(`> ${query}_`));
   lines.push('');
@@ -443,7 +436,6 @@ export interface RunInteractiveListOptions {
 
 export async function runInteractiveList(
   allItems: Worktree[],
-  mode: 'repo' | 'global',
   handlers: TuiHandlers,
   options: RunInteractiveListOptions = {},
 ): Promise<void> {
@@ -463,7 +455,6 @@ export async function runInteractiveList(
       filtered,
       selectedIndex,
       query,
-      mode,
       lastRefresh,
       autoRefreshMinutes,
     );
@@ -558,6 +549,14 @@ export async function runInteractiveList(
         } else if (key === 'd' || key === 'D') {
           const item = filtered[selectedIndex];
           if (item) {
+            if (item.isMain) {
+              process.stdout.write(
+                pc.red(
+                  '\nCannot delete the main repository — only worktrees can be removed.\n',
+                ),
+              );
+              return;
+            }
             if (item.isCurrent) {
               process.stdout.write(
                 pc.red('\nCannot delete the worktree you are currently in.\n'),

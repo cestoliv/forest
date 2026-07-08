@@ -34,6 +34,9 @@ describe('getGlobalConfig', () => {
     const store = createStore(tmpDir);
     const config = getGlobalConfig(store);
     expect(config.ide).toBe('zed');
+    expect(config.agent_command).toBe('claude');
+    expect(config.agent_mode).toBe('default');
+    expect(config.auto_refresh_minutes).toBe(5);
     expect(config.repos).toEqual([]);
     expect(config.repo_overrides).toEqual({});
   });
@@ -75,19 +78,18 @@ describe('getEffectiveConfig', () => {
     const config = getEffectiveConfig('/no/override', store);
     expect(config.ide).toBe('zed');
     expect(config.setup_commands).toEqual([]);
-    expect(config.auto_refresh_minutes).toBe(5);
+    expect(config.agent_mode).toBe('default');
   });
 
-  it('honours a per-repo auto_refresh_minutes override', () => {
+  it('reads auto_refresh_minutes from global config only (not per-repo)', () => {
     const store = createStore(tmpDir);
-    setGlobalConfig(
-      { repo_overrides: { '/my/repo': { auto_refresh_minutes: 1 } } },
-      store,
-    );
-    expect(getEffectiveConfig('/my/repo', store).auto_refresh_minutes).toBe(1);
-    expect(getEffectiveConfig('/other/repo', store).auto_refresh_minutes).toBe(
-      5,
-    );
+    expect(getGlobalConfig(store).auto_refresh_minutes).toBe(5);
+    setGlobalConfig({ auto_refresh_minutes: 10 }, store);
+    expect(getGlobalConfig(store).auto_refresh_minutes).toBe(10);
+    // It is no longer part of the per-repo effective config surface.
+    expect(
+      'auto_refresh_minutes' in getEffectiveConfig('/my/repo', store),
+    ).toBe(false);
   });
 
   it('overrides global fields with repo-specific values', () => {
@@ -95,7 +97,11 @@ describe('getEffectiveConfig', () => {
     setGlobalConfig(
       {
         repo_overrides: {
-          '/my/repo': { ide: 'code', setup_commands: ['yarn'] },
+          '/my/repo': {
+            ide: 'code',
+            setup_commands: ['yarn'],
+            agent_mode: 'plan',
+          },
         },
       },
       store,
@@ -104,6 +110,7 @@ describe('getEffectiveConfig', () => {
     expect(config.ide).toBe('code');
     expect(config.setup_commands).toEqual(['yarn']);
     expect(config.worktree_path).toBe('../');
+    expect(config.agent_mode).toBe('plan');
   });
 
   it('repo override does not affect other repos', () => {

@@ -114,6 +114,28 @@ describe('buildAgentTask', () => {
     const task = buildAgentTask('claude --permission-mode plan', 'test', 'L');
     expect(task.command).toBe("claude --permission-mode plan 'test'");
   });
+
+  it('does not append the prompt when appendPrompt is false', () => {
+    const task = buildAgentTask(
+      'claude -p already-here',
+      'test',
+      'L',
+      undefined,
+      false,
+    );
+    expect(task.command).toBe('claude -p already-here');
+  });
+
+  it('still injects the mode but omits the prompt when appendPrompt is false', () => {
+    const task = buildAgentTask(
+      'claude -p already-here',
+      'test',
+      'L',
+      'auto',
+      false,
+    );
+    expect(task.command).toBe('claude -p already-here --permission-mode auto');
+  });
 });
 
 describe('upsertTask / removeTask', () => {

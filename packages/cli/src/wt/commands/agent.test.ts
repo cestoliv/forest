@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import { openIde } from '../lib/ide.js';
 import {
+  buildAgentTask,
   cleanupAgentTask,
   ensureKeymap,
   isHeadlessSession,
@@ -24,16 +25,23 @@ vi.mock('../lib/ide.js', () => ({
   openIde: vi.fn(async () => true),
 }));
 
-vi.mock('../lib/zed.js', () => ({
-  AGENT_TASK_LABEL: 'wt: agent',
-  buildAgentTask: vi.fn(() => ({ label: 'wt: agent' })),
-  writeAgentTask: vi.fn(() => ({ createdDir: true, createdFile: true })),
-  ensureKeymap: vi.fn(() => true),
-  triggerChord: vi.fn(async () => ({ ok: true })),
-  cleanupAgentTask: vi.fn(),
-  openAccessibilitySettings: vi.fn(),
-  isHeadlessSession: vi.fn(() => false),
-}));
+vi.mock('../lib/zed.js', async (importOriginal) => {
+  // Use the real (pure) buildAgentTask so tests can assert the produced task
+  // command string — the command-templating wiring lives in agent.ts, so the
+  // real builder is needed to observe the final command. Everything with I/O is
+  // still stubbed out.
+  const actual = await importOriginal<typeof import('../lib/zed.js')>();
+  return {
+    AGENT_TASK_LABEL: 'wt: agent',
+    buildAgentTask: vi.fn(actual.buildAgentTask),
+    writeAgentTask: vi.fn(() => ({ createdDir: true, createdFile: true })),
+    ensureKeymap: vi.fn(() => true),
+    triggerChord: vi.fn(async () => ({ ok: true })),
+    cleanupAgentTask: vi.fn(),
+    openAccessibilitySettings: vi.fn(),
+    isHeadlessSession: vi.fn(() => false),
+  };
+});
 
 // Branch is always supplied in these tests, so clack prompts are never hit;
 // stubbing keeps the module side-effect free.
@@ -98,7 +106,7 @@ describe('createAgentWorktree', () => {
     const store = configure();
 
     const promise = createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
     });
     await vi.runAllTimersAsync();
@@ -114,7 +122,10 @@ describe('createAgentWorktree', () => {
   it('falls back to opening the IDE when it is not Zed', async () => {
     const store = configure({ ide: 'echo' });
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
 
     expect(openIde).toHaveBeenCalledWith('echo', [], expect.any(String));
     expect(console.log).toHaveBeenCalledWith(
@@ -129,7 +140,7 @@ describe('createAgentWorktree', () => {
     const lines: string[] = [];
 
     await createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       report: (m) => lines.push(m),
     });
@@ -143,7 +154,10 @@ describe('createAgentWorktree', () => {
     const store = configure();
     vi.mocked(ensureKeymap).mockReturnValue(false);
 
-    await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
 
     expect(openIde).toHaveBeenCalledWith('zed', [], expect.any(String));
     expect(triggerChord).not.toHaveBeenCalled();
@@ -163,7 +177,7 @@ describe('createAgentWorktree', () => {
 
     const lines: string[] = [];
     await createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       report: (m) => lines.push(m),
     });
@@ -192,7 +206,10 @@ describe('createAgentWorktree', () => {
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = true;
     try {
-      await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+      await createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+      });
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }
@@ -211,7 +228,10 @@ describe('createAgentWorktree', () => {
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = true;
     try {
-      await createAgentWorktree('feature', 'do stuff', { cwd: repoDir, store });
+      await createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+      });
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }
@@ -235,6 +255,168 @@ describe('createAgentWorktree', () => {
     expect(writeAgentTask).not.toHaveBeenCalled();
     expect(openIde).not.toHaveBeenCalled();
   });
+
+  it('runs the repo picker even when cwd is inside a git repo', async () => {
+    vi.useFakeTimers();
+    const store = configure();
+    const repoPicker = vi.fn(async () => repoDir);
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    try {
+      const promise = createAgentWorktree('feature', 'do stuff', {
+        cwd: repoDir,
+        store,
+        repoPicker,
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+      expect(repoPicker).toHaveBeenCalled();
+      expect(writeAgentTask).toHaveBeenCalled();
+    } finally {
+      process.stdin.isTTY = originalIsTTY;
+    }
+  });
+
+  it('skips the repo picker when repoRoot is passed explicitly', async () => {
+    vi.useFakeTimers();
+    const store = configure();
+    const repoPicker = vi.fn(async () => repoDir);
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      repoPicker,
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+    expect(repoPicker).not.toHaveBeenCalled();
+    expect(writeAgentTask).toHaveBeenCalled();
+  });
+});
+
+describe('createAgentWorktree (mode resolution)', () => {
+  const runAgent = async (
+    store: ReturnType<typeof configure>,
+    mode?: string,
+  ) => {
+    vi.useFakeTimers();
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      ...(mode !== undefined ? { mode } : {}),
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+  };
+
+  it("defaults to 'default' when neither --mode nor agent_mode is set", async () => {
+    await runAgent(configure());
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+      true,
+    );
+  });
+
+  it('falls back to the configured agent_mode when --mode is omitted', async () => {
+    await runAgent(configure({ agent_mode: 'plan' }));
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'plan',
+      true,
+    );
+  });
+
+  it('lets an explicit --mode override the configured agent_mode', async () => {
+    await runAgent(configure({ agent_mode: 'plan' }), 'auto');
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'auto',
+      true,
+    );
+  });
+
+  it("warns and falls back to 'default' on an invalid configured agent_mode", async () => {
+    await runAgent(configure({ agent_mode: 'Plan' }));
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Invalid agent_mode "Plan"'),
+    );
+    // The worktree/agent still start — no orphan, no crash.
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+      true,
+    );
+  });
+
+  it("treats an empty agent_mode as unset and falls back to 'default'", async () => {
+    await runAgent(configure({ agent_mode: '' }));
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+      true,
+    );
+  });
+
+  it('throws without creating a worktree on an invalid --mode', async () => {
+    const store = configure();
+    await expect(
+      createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+        mode: 'bogus',
+      }),
+    ).rejects.toThrow(/Invalid mode/);
+    expect(writeAgentTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAgentWorktree (command templating)', () => {
+  const run = async (store: ReturnType<typeof configure>) => {
+    vi.useFakeTimers();
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+  };
+
+  // The real buildAgentTask runs (see the zed mock), so its return value is the
+  // final Zed task — assert against its command string.
+  const producedCommand = (): string =>
+    vi.mocked(buildAgentTask).mock.results[0].value.command;
+
+  it('substitutes {{branch}} in agent_command', async () => {
+    await run(
+      configure({ agent_command: 'claude --remote-control {{branch}}' }),
+    );
+    expect(producedCommand()).toContain('--remote-control feature');
+  });
+
+  it('places {{prompt}} inline and does not double-append the prompt', async () => {
+    await run(configure({ agent_command: 'claude -p {{prompt}}' }));
+    const command = producedCommand();
+    expect(command).toContain('do stuff');
+    // The prompt must appear exactly once — not substituted AND appended.
+    expect(command.match(/do stuff/g)).toHaveLength(1);
+  });
+
+  it('auto-appends the prompt when agent_command has no {{prompt}}', async () => {
+    await run(configure({ agent_command: 'claude' }));
+    expect(producedCommand()).toBe(
+      "claude --permission-mode default 'do stuff'",
+    );
+  });
 });
 
 describe('createAgentWorktree (existing worktree)', () => {
@@ -252,7 +434,7 @@ describe('createAgentWorktree (existing worktree)', () => {
     const store = preexisting();
 
     await createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: async () => 'quit' as const,
     });
@@ -265,7 +447,7 @@ describe('createAgentWorktree (existing worktree)', () => {
     const store = preexisting();
 
     await createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: async () => 'open' as const,
     });
@@ -280,7 +462,7 @@ describe('createAgentWorktree (existing worktree)', () => {
     const store = preexisting();
 
     const promise = createAgentWorktree('feature', 'do stuff', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: async () => 'agent' as const,
     });

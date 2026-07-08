@@ -50,7 +50,7 @@ describe('createWorktree', () => {
       store,
     );
 
-    await createWorktree('feature', { cwd: repoDir, store });
+    await createWorktree('feature', { repoRoot: repoDir, store });
 
     expect(existsSync(path.join(tmpDir, 'my-repo-feature'))).toBe(true);
   });
@@ -69,9 +69,28 @@ describe('createWorktree', () => {
       store,
     );
 
-    await createWorktree('feature', { cwd: repoDir, store });
+    await createWorktree('feature', { repoRoot: repoDir, store });
 
     expect(existsSync(markerFile)).toBe(true);
+  });
+
+  it('expands {{…}} template variables in setup commands', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        // {{branch}} must be expanded before the command runs.
+        setup_commands: [`touch ${tmpDir}/{{branch}}.marker`],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    await createWorktree('feature', { repoRoot: repoDir, store });
+
+    expect(existsSync(path.join(tmpDir, 'feature.marker'))).toBe(true);
   });
 });
 
@@ -95,13 +114,13 @@ describe('createWorktree (existing worktree)', () => {
 
   it('opens the existing worktree when the user chooses open', async () => {
     const store = configureEcho();
-    await createWorktree('feature', { cwd: repoDir, store });
+    await createWorktree('feature', { repoRoot: repoDir, store });
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const prompt = vi.fn(async () => 'open' as const);
 
     await createWorktree('feature', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: prompt,
     });
@@ -114,13 +133,13 @@ describe('createWorktree (existing worktree)', () => {
 
   it('does nothing when the user chooses quit', async () => {
     const store = configureEcho();
-    await createWorktree('feature', { cwd: repoDir, store });
+    await createWorktree('feature', { repoRoot: repoDir, store });
 
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const prompt = vi.fn(async () => 'quit' as const);
 
     await createWorktree('feature', {
-      cwd: repoDir,
+      repoRoot: repoDir,
       store,
       existingWorktreePrompt: prompt,
     });
@@ -140,7 +159,7 @@ describe('createWorktree (existing worktree)', () => {
 
     await expect(
       createWorktree('feature', {
-        cwd: repoDir,
+        repoRoot: repoDir,
         store,
         existingWorktreePrompt: prompt,
       }),
@@ -151,7 +170,7 @@ describe('createWorktree (existing worktree)', () => {
 
   it('exits with error when the worktree exists and TTY is not available', async () => {
     const store = configureEcho();
-    await createWorktree('feature', { cwd: repoDir, store });
+    await createWorktree('feature', { repoRoot: repoDir, store });
 
     const originalIsTTY = process.stdin.isTTY;
     process.stdin.isTTY = false;
@@ -159,7 +178,7 @@ describe('createWorktree (existing worktree)', () => {
       // No existingWorktreePrompt injected, so the real promptExistingWorktree
       // runs and hits its non-TTY guard.
       await expect(
-        createWorktree('feature', { cwd: repoDir, store }),
+        createWorktree('feature', { repoRoot: repoDir, store }),
       ).rejects.toThrow(/already exists/);
     } finally {
       process.stdin.isTTY = originalIsTTY;
@@ -203,7 +222,7 @@ describe('createWorktree (fetch)', () => {
       store,
     );
 
-    await createWorktree('feature', { cwd: cloneDir, store });
+    await createWorktree('feature', { repoRoot: cloneDir, store });
 
     const wtPath = path.join(tmpDir, 'my-repo-clone-feature');
     const wtSha = execSync('git rev-parse HEAD', {
@@ -226,7 +245,7 @@ describe('createWorktree (fetch)', () => {
       store,
     );
 
-    await createWorktree('feature', { cwd: repoDir, store });
+    await createWorktree('feature', { repoRoot: repoDir, store });
 
     const wtPath = path.join(tmpDir, 'my-repo-feature');
     expect(existsSync(wtPath)).toBe(true);
@@ -257,7 +276,7 @@ describe('createWorktree (fetch)', () => {
     // Fetch should target "origin" (extracted correctly), but the ref
     // "origin/<branch>/nested" doesn't exist, so worktree creation fails
     await expect(
-      createWorktree('feature', { cwd: cloneDir, store }),
+      createWorktree('feature', { repoRoot: cloneDir, store }),
     ).rejects.toThrow();
 
     // Key assertion: no "Could not fetch" warning — the remote "origin" was
@@ -267,7 +286,7 @@ describe('createWorktree (fetch)', () => {
     warnSpy.mockRestore();
   });
 
-  it('warns when fetch fails and throws if base branch is also invalid', async () => {
+  it('warns (no remote) and throws if base branch is also invalid', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig(
       {
@@ -282,15 +301,14 @@ describe('createWorktree (fetch)', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    // Will fail to fetch "nonexistent-remote" but should still create from HEAD
-    // since the branch doesn't exist and baseBranch ref resolution will also fail,
-    // we expect an error from git worktree add itself
+    // The repo has no "nonexistent-remote" remote, so fetch is skipped with a
+    // "no remote" warning; creation still fails because the base ref is invalid.
     await expect(
-      createWorktree('feature', { cwd: repoDir, store }),
+      createWorktree('feature', { repoRoot: repoDir, store }),
     ).rejects.toThrow();
 
     expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Could not fetch'),
+      expect.stringContaining('has no "nonexistent-remote" remote'),
     );
     warnSpy.mockRestore();
   });
@@ -313,12 +331,12 @@ describe('createWorktree (setup failure)', () => {
     );
 
     await expect(
-      createWorktree('feature', { cwd: repoDir, store }),
+      createWorktree('feature', { repoRoot: repoDir, store }),
     ).rejects.toThrow(/Setup failed/);
   });
 });
 
-describe('createWorktree (outside repo)', () => {
+describe('createWorktree (repo picker)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('exits with error when TTY is not available and repos exist', async () => {
@@ -374,6 +392,80 @@ describe('createWorktree (outside repo)', () => {
     } finally {
       process.stdin.isTTY = originalIsTTY;
     }
+  });
+
+  it('runs the repo picker even when cwd is inside a git repo', async () => {
+    // cwd is inside repoDir (which auto-registers), yet with no explicit
+    // repoRoot the picker must still fire — the tool never assumes the cwd repo.
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    const repoPicker = vi.fn(async () => repoDir);
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    try {
+      await createWorktree('feature', { cwd: repoDir, store, repoPicker });
+
+      expect(repoPicker).toHaveBeenCalled();
+      expect(existsSync(path.join(tmpDir, 'my-repo-feature'))).toBe(true);
+    } finally {
+      process.stdin.isTTY = originalIsTTY;
+    }
+  });
+
+  it('skips the repo picker when repoRoot is passed explicitly', async () => {
+    // An explicit repoRoot (CLI --repo or the TUI wizard) bypasses the picker.
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+
+    const repoPicker = vi.fn(async () => repoDir);
+    await createWorktree('feature', { repoRoot: repoDir, store, repoPicker });
+
+    expect(repoPicker).not.toHaveBeenCalled();
+    expect(existsSync(path.join(tmpDir, 'my-repo-feature'))).toBe(true);
+    // The explicit repo is registered for future discovery too.
+    expect(store.get('repos')).toContain(repoDir);
+  });
+
+  it('throws when repoRoot is not a git repository', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+    const notARepo = path.join(tmpDir, 'not-a-repo');
+    mkdirSync(notARepo, { recursive: true });
+
+    await expect(
+      createWorktree('feature', { repoRoot: notARepo, store }),
+    ).rejects.toThrow(/is not a git repository/);
+
+    // Nothing created.
+    expect(existsSync(path.join(tmpDir, 'not-a-repo-feature'))).toBe(false);
   });
 
   it('uses branch returned by branchInput when no branch arg is provided', async () => {

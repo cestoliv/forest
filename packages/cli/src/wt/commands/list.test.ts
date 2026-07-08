@@ -1,12 +1,30 @@
 // src/commands/list.test.ts
 import { execSync } from 'node:child_process';
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import type { Worktree } from '../lib/git.js';
-import { prepareListItems, selectWipeCandidates } from './list.js';
+import {
+  deleteWorktree,
+  prepareListItems,
+  selectWipeCandidates,
+} from './list.js';
+
+// deleteWorktree prompts to confirm removal; auto-confirm so the teardown path
+// runs. The pure list tests don't touch clack, so a module mock is safe.
+vi.mock('@clack/prompts', () => ({
+  confirm: vi.fn(async () => true),
+  isCancel: vi.fn(() => false),
+  log: { warn: vi.fn() },
+}));
 
 let tmpDir: string;
 let repoDir: string;
@@ -28,12 +46,11 @@ afterEach(() => {
 });
 
 describe('prepareListItems', () => {
-  it('returns repo mode when cwd is inside a git repo', async () => {
+  it("lists the repo's worktrees when cwd is inside it", async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     const result = await prepareListItems({ cwd: repoDir, store });
-    expect(result.mode).toBe('repo');
-    expect(result.repoRoot).toBe(repoDir);
     expect(result.items.length).toBeGreaterThan(0);
+    expect(result.items.some((w) => w.repoRoot === repoDir)).toBe(true);
   });
 
   it('auto-registers the repo on first run', async () => {
@@ -56,27 +73,79 @@ describe('prepareListItems', () => {
     expect(repos.filter((r) => r === repoDir)).toHaveLength(1);
   });
 
-  it('returns global mode when cwd is outside any git repo', async () => {
-    const store = createStore(path.join(tmpDir, 'config'));
-    const result = await prepareListItems({ cwd: tmpDir, store });
-    expect(result.mode).toBe('global');
-    expect(result.repoRoot).toBeNull();
-  });
-
-  it('global mode includes worktrees from all registered repos', async () => {
+  it('lists worktrees from registered repos regardless of cwd', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig({ repos: [repoDir] }, store);
     const result = await prepareListItems({ cwd: tmpDir, store });
-    expect(result.mode).toBe('global');
     expect(result.items.length).toBeGreaterThan(0);
     expect(result.items[0].repoRoot).toBe(repoDir);
   });
 
-  it('global mode marks no worktree as current when cwd is outside all repos', async () => {
+  it('always lists all registered repos even from inside one of them', async () => {
+    // Second registered repo, distinct from the cwd repo.
+    const otherDir = path.join(tmpDir, 'other-repo');
+    execSync(`mkdir -p ${otherDir}`);
+    execSync('git init', { cwd: otherDir });
+    execSync('git config user.email "t@t.com"', { cwd: otherDir });
+    execSync('git config user.name "T"', { cwd: otherDir });
+    writeFileSync(path.join(otherDir, 'README.md'), '');
+    execSync('git add .', { cwd: otherDir });
+    execSync('git commit -m "init"', { cwd: otherDir });
+
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ repos: [repoDir, otherDir] }, store);
+
+    // cwd is inside repoDir, yet the list must still include otherDir's worktrees.
+    const result = await prepareListItems({ cwd: repoDir, store });
+    const roots = new Set(result.items.map((w) => w.repoRoot));
+    expect(roots.has(repoDir)).toBe(true);
+    expect(roots.has(otherDir)).toBe(true);
+  });
+
+  it('marks no worktree as current when cwd is outside all repos', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
     setGlobalConfig({ repos: [repoDir] }, store);
     const result = await prepareListItems({ cwd: tmpDir, store });
     expect(result.items.every((w) => !w.isCurrent)).toBe(true);
+  });
+
+  it('marks the current worktree when cwd is inside a registered worktree', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    setGlobalConfig({ repos: [repoDir] }, store);
+
+    const result = await prepareListItems({ cwd: wtPath, store });
+    const current = result.items.find((w) => w.isCurrent);
+    expect(current?.path).toBe(wtPath);
+  });
+});
+
+describe('deleteWorktree (teardown templating)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('expands {{…}} template variables in teardown commands', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      // {{branch}} must be expanded before the teardown command runs.
+      { teardown_commands: [`touch ${tmpDir}/{{branch}}.teardown`] },
+      store,
+    );
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const item: Worktree = {
+      path: wtPath,
+      branch: 'feature',
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+    const removed = await deleteWorktree(item, store);
+
+    expect(removed).toBe(true);
+    expect(existsSync(path.join(tmpDir, 'feature.teardown'))).toBe(true);
   });
 });
 
@@ -85,6 +154,7 @@ describe('selectWipeCandidates', () => {
     path: '/r/wt',
     branch: 'feature',
     isCurrent: false,
+    isMain: false,
     repoRoot: '/r',
     ...over,
   });
@@ -100,8 +170,8 @@ describe('selectWipeCandidates', () => {
     expect(selectWipeCandidates(items, allMerged)).toEqual([]);
   });
 
-  it('excludes the main worktree (path === repoRoot)', () => {
-    const items = [wt({ path: '/r', repoRoot: '/r' })];
+  it('excludes the main worktree (isMain)', () => {
+    const items = [wt({ path: '/r', repoRoot: '/r', isMain: true })];
     expect(selectWipeCandidates(items, allMerged)).toEqual([]);
   });
 
@@ -118,7 +188,12 @@ describe('selectWipeCandidates', () => {
   it('keeps only merged worktrees from a mixed list', () => {
     const merged = wt({ path: '/r/merged', branch: 'merged' });
     const unmerged = wt({ path: '/r/unmerged', branch: 'unmerged' });
-    const main = wt({ path: '/r', repoRoot: '/r', branch: 'main' });
+    const main = wt({
+      path: '/r',
+      repoRoot: '/r',
+      branch: 'main',
+      isMain: true,
+    });
     const result = selectWipeCandidates(
       [merged, unmerged, main],
       (w) => w.branch === 'merged' || w.branch === 'main',

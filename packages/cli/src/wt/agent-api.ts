@@ -26,8 +26,11 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
   const report: Reporter = (m) => lines.push(m);
   try {
     await createAgentWorktree(opts.branch, opts.prompt, {
-      cwd: opts.repoPath,
-      mode: opts.mode ?? 'plan',
+      // Pass repoRoot (not cwd): upstream's "always global" change made the repo
+      // picker always run unless repoRoot is set, and the daemon has no TTY.
+      repoRoot: opts.repoPath,
+      // Undefined mode lets createAgentWorktree resolve config.agent_mode ?? 'default'.
+      mode: opts.mode,
       report,
       store: opts.store,
     });

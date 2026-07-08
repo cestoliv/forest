@@ -1,5 +1,6 @@
 // src/commands/list.ts
 
+import path from 'node:path';
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import {
@@ -11,15 +12,18 @@ import {
 import {
   fetchRemote,
   getRepoRoot,
+  isBranchClosed,
   isBranchMerged,
   listWorktreeDirtyFiles,
   listWorktrees,
+  remoteExists,
   removeWorktree,
   type Worktree,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
+import { buildTemplateVars, expandTemplate } from '../lib/template.js';
 import {
   runBranchInput,
   runInteractiveList,
@@ -34,26 +38,23 @@ interface WorktreeTarget {
 }
 
 /**
- * Build the leading wizard steps shared by create and agent: pick the repo
- * (global mode only) then enter the branch. Both write into `state`, and each
- * step preserves its prior answer so back-navigation doesn't lose input.
+ * Build the leading wizard steps shared by create and agent: always pick the
+ * repo, then enter the branch. Both write into `state`, and each step preserves
+ * its prior answer so back-navigation doesn't lose input.
  */
 function buildWorktreeSteps(
-  repoRoot: string | null,
   store: ConfigStore,
   state: WorktreeTarget,
 ): Array<() => Promise<boolean>> {
   const steps: Array<() => Promise<boolean>> = [];
 
-  if (!repoRoot) {
-    const repos = getRegisteredRepos(store);
-    steps.push(async () => {
-      const picked = await runRepoPicker(repos, state.pickedRepo);
-      if (!picked) return false;
-      state.pickedRepo = picked;
-      return true;
-    });
-  }
+  const repos = getRegisteredRepos(store);
+  steps.push(async () => {
+    const picked = await runRepoPicker(repos, state.pickedRepo);
+    if (!picked) return false;
+    state.pickedRepo = picked;
+    return true;
+  });
 
   steps.push(async () => {
     const entered = await runBranchInput(
@@ -70,8 +71,6 @@ function buildWorktreeSteps(
 
 export interface ListItems {
   items: Worktree[];
-  mode: 'repo' | 'global';
-  repoRoot: string | null;
 }
 
 export async function prepareListItems(
@@ -79,37 +78,32 @@ export async function prepareListItems(
 ): Promise<ListItems> {
   const { cwd = process.cwd(), store = createStore() } = options;
 
-  let repoRoot: string | null = null;
+  // Auto-register the current repo for discovery (never scope to it): the list
+  // is always global. Passing `cwd` to `listWorktrees` still marks the current
+  // worktree so it renders as `(current)`.
   try {
-    repoRoot = getRepoRoot(cwd);
+    registerRepo(getRepoRoot(cwd), store);
   } catch {
-    // not in a repo — fall through to global mode
+    // not in a repo — nothing to auto-register
   }
 
-  if (repoRoot) {
-    registerRepo(repoRoot, store);
-    const items = listWorktrees(repoRoot, cwd);
-    return { items, mode: 'repo', repoRoot };
-  }
-
-  const repos = getRegisteredRepos(store);
-  const items = repos.flatMap((repo) => {
+  const items = getRegisteredRepos(store).flatMap((repo) => {
     try {
       return listWorktrees(repo, cwd);
     } catch {
       return [];
     }
   });
-  return { items, mode: 'global', repoRoot: null };
+  return { items };
 }
 
 export async function runList(
   options: { cwd?: string; store?: ConfigStore } = {},
 ): Promise<void> {
   const { store = createStore(), cwd = process.cwd() } = options;
-  const { items, mode, repoRoot } = await prepareListItems({ cwd, store });
+  const { items } = await prepareListItems({ cwd, store });
 
-  if (items.length === 0 && mode === 'global') {
+  if (items.length === 0) {
     console.log(
       pc.dim(
         'No repos registered. Run `wt create` inside a repo to get started.',
@@ -118,14 +112,10 @@ export async function runList(
     return;
   }
 
-  const autoRefreshMinutes =
-    mode === 'repo' && repoRoot
-      ? getEffectiveConfig(repoRoot, store).auto_refresh_minutes
-      : getGlobalConfig(store).auto_refresh_minutes;
+  const autoRefreshMinutes = getGlobalConfig(store).auto_refresh_minutes;
 
   await runInteractiveList(
     items,
-    mode,
     {
       onOpen: (item) => {
         const config = getEffectiveConfig(item.repoRoot, store);
@@ -139,15 +129,18 @@ export async function runList(
       onCreate: async () => {
         // Wizard: worktree (repo → branch). Esc steps back (repo picker) and
         // drops to the list from the first step; preserved input avoids re-typing.
-        const state: WorktreeTarget = { pickedRepo: repoRoot ?? undefined };
-        const steps = buildWorktreeSteps(repoRoot, store, state);
+        const state: WorktreeTarget = {};
+        const steps = buildWorktreeSteps(store, state);
 
         if (!(await runWizard(steps))) return; // cancelled out → back to the list
         if (state.pickedRepo === undefined || state.branch === undefined)
           return;
 
         const { createWorktree } = await import('./create.js');
-        await createWorktree(state.branch, { cwd: state.pickedRepo, store });
+        await createWorktree(state.branch, {
+          repoRoot: state.pickedRepo,
+          store,
+        });
       },
 
       onAgent: async () => {
@@ -156,11 +149,8 @@ export async function runList(
         // Wizard: worktree (repo → branch) → plan prompt → permission mode. Esc
         // steps back one (and to the list from the first step). Entered values
         // are preserved so going back and forward doesn't lose work.
-        const state: WorktreeTarget & { plan?: string; mode: string } = {
-          pickedRepo: repoRoot ?? undefined,
-          mode: 'plan',
-        };
-        const steps = buildWorktreeSteps(repoRoot, store, state);
+        const state: WorktreeTarget & { plan?: string; mode?: string } = {};
+        const steps = buildWorktreeSteps(store, state);
 
         steps.push(async () => {
           const entered = await clack.text({
@@ -174,9 +164,14 @@ export async function runList(
         });
 
         steps.push(async () => {
+          // Preselect the configured default for the chosen repo (the repo step
+          // has already run by now), unless the user already picked a mode.
+          const configuredMode = state.pickedRepo
+            ? getEffectiveConfig(state.pickedRepo, store).agent_mode
+            : undefined;
           const chosen = await clack.select({
             message: 'Permission mode:',
-            initialValue: state.mode,
+            initialValue: state.mode ?? configuredMode,
             options: VALID_MODES.map((m) => ({ value: String(m), label: m })),
           });
           if (clack.isCancel(chosen)) return false;
@@ -193,7 +188,7 @@ export async function runList(
           return;
 
         await createAgentWorktree(state.branch, state.plan, {
-          cwd: state.pickedRepo,
+          repoRoot: state.pickedRepo,
           store,
           mode: state.mode,
         });
@@ -226,7 +221,15 @@ export async function deleteWorktree(
   const config = getEffectiveConfig(item.repoRoot, store);
   if (config.teardown_commands.length > 0) {
     console.log(pc.dim('Running teardown commands...'));
-    const result = await runCommands(config.teardown_commands, item.path);
+    const vars = buildTemplateVars({
+      branch: item.branch,
+      repoRoot: item.repoRoot,
+      worktreePath: item.path,
+    });
+    const result = await runCommands(
+      config.teardown_commands.map((c) => expandTemplate(c, vars)),
+      item.path,
+    );
     if (!result.success) {
       clack.log.warn(
         `Teardown command failed: ${result.failedCommand} (exit code ${result.exitCode})`,
@@ -287,29 +290,31 @@ export async function deleteWorktree(
 }
 
 /**
- * Pure filter: keep only worktrees that are safe-and-merged prune candidates.
- * Excludes the current worktree, the main worktree (`path === repoRoot`), and
- * detached-HEAD worktrees; then applies the injected `isMerged` predicate.
+ * Pure filter: keep only worktrees that are safe prunable candidates (merged or
+ * closed). Excludes the current worktree, the main worktree (`isMain`), and
+ * detached-HEAD worktrees; then applies the injected `isPrunable` predicate.
  */
 export function selectWipeCandidates(
   items: Worktree[],
-  isMerged: (wt: Worktree) => boolean,
+  isPrunable: (wt: Worktree) => boolean,
 ): Worktree[] {
   return items.filter(
     (wt) =>
       !wt.isCurrent &&
-      wt.path !== wt.repoRoot &&
+      !wt.isMain &&
       wt.branch !== '(detached)' &&
-      isMerged(wt),
+      isPrunable(wt),
   );
 }
 
 /**
- * Build a per-worktree "is merged into its repo's base branch" predicate.
- * Each worktree is checked against its own repo's effective `base_branch`, and
- * a worktree sitting on the base branch itself is never a candidate.
+ * Build a per-worktree "is prunable" predicate: the branch was either merged
+ * into its repo's base branch, or its PR/MR was closed without merging (dead
+ * branch). Each worktree is checked against its own repo's effective
+ * `base_branch`, and a worktree sitting on the base branch itself is never a
+ * candidate.
  */
-export function buildMergedPredicate(
+export function buildPrunePredicate(
   store: ConfigStore,
 ): (wt: Worktree) => boolean {
   return (wt) => {
@@ -317,7 +322,9 @@ export function buildMergedPredicate(
     const base = config.base_branch;
     const baseLocal = base.split('/', 2).slice(1).join('/') || base;
     if (wt.branch === base || wt.branch === baseLocal) return false;
-    return isBranchMerged(wt.repoRoot, wt.branch, base);
+    if (isBranchMerged(wt.repoRoot, wt.branch, base)) return true;
+    if (isBranchClosed(wt.repoRoot, wt.branch, base)) return true;
+    return false;
   };
 }
 
@@ -343,6 +350,14 @@ export async function wipeWorktrees(
       );
       if (parts.length !== 2) continue;
       const remote = parts[0] || 'origin';
+      if (!remoteExists(wt.repoRoot, remote)) {
+        console.warn(
+          pc.yellow(
+            `⚠ ${path.basename(wt.repoRoot)} has no "${remote}" remote — falling back to local git`,
+          ),
+        );
+        continue;
+      }
       try {
         fetchRemote(wt.repoRoot, remote);
       } catch (err) {
@@ -355,9 +370,9 @@ export async function wipeWorktrees(
     }
   }
 
-  const candidates = selectWipeCandidates(items, buildMergedPredicate(store));
+  const candidates = selectWipeCandidates(items, buildPrunePredicate(store));
   if (candidates.length === 0) {
-    console.log(pc.dim('No merged worktrees to wipe.'));
+    console.log(pc.dim('No merged or closed worktrees to wipe.'));
     return [];
   }
 

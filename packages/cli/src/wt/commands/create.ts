@@ -1,5 +1,6 @@
 // src/commands/create.ts
 import { existsSync } from 'node:fs';
+import path from 'node:path';
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import {
@@ -14,18 +15,25 @@ import {
   fetchRemote,
   getRepoRoot,
   listWorktrees,
+  remoteExists,
   resolveWorktreePath,
   setUpstreamTracking,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
+import { buildTemplateVars, expandTemplate } from '../lib/template.js';
 import { runBranchInput, runRepoPicker } from '../lib/tui.js';
 
 export type ExistingWorktreeAction = 'open' | 'agent' | 'quit';
 
 export interface CreateOptions {
   cwd?: string;
+  /**
+   * Pre-resolved target repo (e.g. from the TUI wizard's repo picker). When
+   * set, `prepareWorktree` skips the picker; `cwd` is used only for discovery.
+   */
+  repoRoot?: string;
   store?: ConfigStore;
   repoPicker?: (repos: string[]) => Promise<string | null>;
   branchInput?: (repoRoot: string) => Promise<string | null>;
@@ -41,6 +49,8 @@ export interface CreateOptions {
 export interface PreparedWorktree {
   /** Whether the worktree was just created or already existed on disk. */
   status: 'created' | 'exists';
+  /** The resolved branch name (so callers can template-expand commands). */
+  branch: string;
   repoRoot: string;
   worktreePath: string;
   config: RepoConfig;
@@ -67,9 +77,29 @@ export async function prepareWorktree(
 
   let repoRoot: string | undefined;
 
+  // Auto-register the current repo for discovery (best-effort; a non-repo cwd
+  // is silently ignored). This runs regardless of `--repo` so the current repo
+  // stays discoverable next time — it never scopes/defaults the target repo.
   try {
-    repoRoot = getRepoRoot(cwd);
+    registerRepo(getRepoRoot(cwd), store);
   } catch {
+    // not in a repo — nothing to auto-register
+  }
+
+  if (options.repoRoot) {
+    // An explicit repo (CLI `--repo` or the TUI wizard's already-picked repo).
+    // The CLI value is untrusted, so resolve it against cwd and confirm it is a
+    // real git repo root before trusting it; re-resolving the wizard's
+    // already-valid root is harmless. A bad path is a hard input error, so
+    // throw (never process.exit — a library caller like the daemon reaches this
+    // via runAgent's repoRoot and must get { ok:false }, not be killed).
+    const resolved = path.resolve(cwd, options.repoRoot);
+    try {
+      repoRoot = getRepoRoot(resolved);
+    } catch {
+      throw new Error(`${options.repoRoot} is not a git repository`);
+    }
+  } else {
     const repos = getRegisteredRepos(store);
     if (repos.length === 0) {
       console.error(
@@ -90,22 +120,12 @@ export async function prepareWorktree(
     const picked = await repoPicker(repos);
     if (!picked) return null;
     repoRoot = picked;
-    if (!branch) {
-      const entered = await branchInput(repoRoot);
-      if (!entered) return null;
-      branch = entered;
-    }
   }
 
-  if (!repoRoot) return null;
-
   if (!branch) {
-    const input = await clack.text({
-      message: 'Branch name:',
-      validate: (v) => (!v || v.length === 0 ? 'Required' : undefined),
-    });
-    if (clack.isCancel(input)) return null;
-    branch = input as string;
+    const entered = await branchInput(repoRoot);
+    if (!entered) return null;
+    branch = entered;
   }
 
   registerRepo(repoRoot, store);
@@ -132,21 +152,29 @@ export async function prepareWorktree(
         `Path already exists but is not a git worktree: ${worktreePath}`,
       );
     }
-    return { status: 'exists', repoRoot, worktreePath, config };
+    return { status: 'exists', branch, repoRoot, worktreePath, config };
   }
 
   const parts = config.base_branch.split('/', 2);
   const remote = parts[0] || 'origin';
 
   if (parts.length === 2) {
-    try {
-      fetchRemote(repoRoot, remote);
-    } catch (err) {
+    if (!remoteExists(repoRoot, remote)) {
       console.warn(
         pc.yellow(
-          `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+          `⚠ ${path.basename(repoRoot)} has no "${remote}" remote — falling back to local git`,
         ),
       );
+    } else {
+      try {
+        fetchRemote(repoRoot, remote);
+      } catch (err) {
+        console.warn(
+          pc.yellow(
+            `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+          ),
+        );
+      }
     }
   }
 
@@ -163,7 +191,11 @@ export async function prepareWorktree(
 
   if (config.setup_commands.length > 0) {
     console.log(pc.dim('Running setup commands...'));
-    const result = await runCommands(config.setup_commands, worktreePath);
+    const vars = buildTemplateVars({ branch, repoRoot, worktreePath });
+    const result = await runCommands(
+      config.setup_commands.map((c) => expandTemplate(c, vars)),
+      worktreePath,
+    );
     if (!result.success) {
       throw new Error(
         `Setup failed: ${result.failedCommand} (exit code ${result.exitCode})\nWorktree left at ${worktreePath} for inspection`,
@@ -171,7 +203,7 @@ export async function prepareWorktree(
     }
   }
 
-  return { status: 'created', repoRoot, worktreePath, config };
+  return { status: 'created', branch, repoRoot, worktreePath, config };
 }
 
 /**

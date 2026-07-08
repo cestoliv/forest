@@ -19,18 +19,21 @@ const items: Worktree[] = [
     path: '/projects/repo',
     branch: 'main',
     isCurrent: true,
+    isMain: true,
     repoRoot: '/projects/repo',
   },
   {
     path: '/projects/repo-feature',
     branch: 'my-feature',
     isCurrent: false,
+    isMain: false,
     repoRoot: '/projects/repo',
   },
   {
     path: '/projects/other',
     branch: 'main',
     isCurrent: false,
+    isMain: true,
     repoRoot: '/projects/other',
   },
 ];
@@ -69,53 +72,45 @@ describe('groupByRepo', () => {
 
 describe('renderList', () => {
   it('includes branch names', () => {
-    const output = renderList(items, 0, '', 'repo');
+    const output = renderList(items, 0, '');
     expect(output).toContain('main');
     expect(output).toContain('my-feature');
   });
 
   it('includes worktree paths', () => {
-    const output = renderList(items, 0, '', 'repo');
+    const output = renderList(items, 0, '');
     expect(output).toContain('/projects/repo');
     expect(output).toContain('/projects/repo-feature');
   });
 
   it('includes the search query', () => {
-    const output = renderList(items, 0, 'feat', 'repo');
+    const output = renderList(items, 0, 'feat');
     expect(output).toContain('feat');
   });
 
   it('includes navigation hint', () => {
-    const output = renderList(items, 0, '', 'repo');
+    const output = renderList(items, 0, '');
     expect(output).toContain('↕ navigate');
   });
 
-  it('shows info line in global mode but not repo mode', () => {
-    const repoOutput = renderList(items, 0, '', 'repo');
-    expect(repoOutput).not.toContain('Not in a git repository');
-
-    const globalOutput = renderList(items, 0, '', 'global');
-    expect(globalOutput).toContain('Not in a git repository');
+  it('shows C create and A agent hints', () => {
+    const output = renderList(items, 0, '');
+    expect(output).toContain('C create');
+    expect(output).toContain('A agent');
   });
 
-  it('shows C create and A agent hints in both repo and global mode', () => {
-    const repoOutput = renderList(items, 0, '', 'repo');
-    expect(repoOutput).toContain('C create');
-    expect(repoOutput).toContain('A agent');
-
-    const globalOutput = renderList(items, 0, '', 'global');
-    expect(globalOutput).toContain('C create');
-    expect(globalOutput).toContain('A agent');
+  it('shows repo section headers', () => {
+    const output = renderList(items, 0, '');
+    expect(output).toContain('REPO');
+    expect(output).toContain('OTHER');
   });
 
-  it('shows repo section headers in both modes', () => {
-    const repoOutput = renderList(items, 0, '', 'repo');
-    expect(repoOutput).toContain('REPO');
-    expect(repoOutput).toContain('OTHER');
-
-    const globalOutput = renderList(items, 0, '', 'global');
-    expect(globalOutput).toContain('REPO');
-    expect(globalOutput).toContain('OTHER');
+  it('labels the main worktree with (main)', () => {
+    // items[2] is a main worktree that is not the current one. (The label is
+    // dimmed like (current) to read as protected, but picocolors strips ANSI
+    // in the non-TTY test env, so only the text is asserted here.)
+    const output = renderList(items, 0, '');
+    expect(output).toContain('(main)');
   });
 
   it('shows lastCommit on a second line when set', () => {
@@ -124,11 +119,12 @@ describe('renderList', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: 'fix: correct login redirect',
       },
     ];
-    const output = renderList(withCommit, 0, '', 'repo');
+    const output = renderList(withCommit, 0, '');
     expect(output).toContain('fix: correct login redirect');
   });
 
@@ -138,6 +134,7 @@ describe('renderList', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: '',
       },
@@ -147,34 +144,28 @@ describe('renderList', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: 'some commit',
       },
     ];
-    const linesWithout = buildListLayout(withoutCommit, 0, '', 'repo').body
-      .length;
-    const linesWith = buildListLayout(withCommit, 0, '', 'repo').body.length;
+    const linesWithout = buildListLayout(withoutCommit, 0, '').body.length;
+    const linesWith = buildListLayout(withCommit, 0, '').body.length;
     expect(linesWith).toBe(linesWithout + 1);
   });
 });
 
 describe('buildListLayout', () => {
-  it('splits header, body and footer per mode', () => {
-    const repo = buildListLayout(items, 0, '', 'repo');
-    expect(repo.header.join('\n')).not.toContain('Not in a git repository');
-    expect(repo.header.join('\n')).toContain('> _');
-    expect(repo.footer.join('\n')).toContain('↕ navigate');
-    expect(repo.footer.join('\n')).toContain('C create');
-    expect(repo.footer.join('\n')).toContain('A agent');
-
-    const global = buildListLayout(items, 0, '', 'global');
-    expect(global.header.join('\n')).toContain('Not in a git repository');
-    expect(global.footer.join('\n')).toContain('C create');
-    expect(global.footer.join('\n')).toContain('A agent');
+  it('splits header, body and footer', () => {
+    const layout = buildListLayout(items, 0, '');
+    expect(layout.header.join('\n')).toContain('> _');
+    expect(layout.footer.join('\n')).toContain('↕ navigate');
+    expect(layout.footer.join('\n')).toContain('C create');
+    expect(layout.footer.join('\n')).toContain('A agent');
   });
 
   it('puts repo group headers and items in the body', () => {
-    const { body } = buildListLayout(items, 0, '', 'repo');
+    const { body } = buildListLayout(items, 0, '');
     const text = body.join('\n');
     expect(text).toContain('REPO');
     expect(text).toContain('OTHER');
@@ -182,7 +173,7 @@ describe('buildListLayout', () => {
   });
 
   it('tracks a one-line span for items without a lastCommit', () => {
-    const { itemSpans } = buildListLayout(items, 0, '', 'repo');
+    const { itemSpans } = buildListLayout(items, 0, '');
     expect(itemSpans).toHaveLength(3);
     for (const span of itemSpans) {
       expect(span.end).toBe(span.start);
@@ -195,30 +186,31 @@ describe('buildListLayout', () => {
         path: '/projects/repo',
         branch: 'main',
         isCurrent: true,
+        isMain: true,
         repoRoot: '/projects/repo',
         lastCommit: 'fix: thing',
       },
     ];
-    const { itemSpans } = buildListLayout(withCommit, 0, '', 'repo');
+    const { itemSpans } = buildListLayout(withCommit, 0, '');
     expect(itemSpans[0].end).toBe(itemSpans[0].start + 1);
   });
 
   it('shows a last-refresh header when a refresh time and interval are given', () => {
     const at = new Date(2026, 0, 1, 14, 32, 5);
-    const { header } = buildListLayout(items, 0, '', 'repo', at, 5);
+    const { header } = buildListLayout(items, 0, '', at, 5);
     const text = header.join('\n');
     expect(text).toContain('Last refreshed');
     expect(text).toContain('every 5m');
   });
 
   it('omits the refresh header without a refresh time', () => {
-    const { header } = buildListLayout(items, 0, '', 'repo');
+    const { header } = buildListLayout(items, 0, '');
     expect(header.join('\n')).not.toContain('Last refreshed');
   });
 
   it('omits the refresh header when the interval is 0', () => {
     const at = new Date(2026, 0, 1, 14, 32, 5);
-    const { header } = buildListLayout(items, 0, '', 'repo', at, 0);
+    const { header } = buildListLayout(items, 0, '', at, 0);
     expect(header.join('\n')).not.toContain('Last refreshed');
   });
 });
@@ -279,44 +271,45 @@ describe('renderList viewport', () => {
     path: `/projects/repo-${n}`,
     branch: `branch-${n}`,
     isCurrent: false,
+    isMain: false,
     repoRoot: '/projects/repo',
   }));
 
   it('never renders more lines than the terminal height', () => {
-    const lineCount = renderList(many, 0, '', 'repo', 10).split('\n').length;
+    const lineCount = renderList(many, 0, '', 10).split('\n').length;
     expect(lineCount).toBeLessThanOrEqual(10);
   });
 
   it("leaves the terminal's last row free so a wrapped footer can't scroll the top off", () => {
-    const lineCount = renderList(many, 0, '', 'repo', 10).split('\n').length;
+    const lineCount = renderList(many, 0, '', 10).split('\n').length;
     expect(lineCount).toBeLessThanOrEqual(9);
   });
 
   it('always keeps the search line and footer visible', () => {
-    const output = renderList(many, 0, '', 'repo', 10);
+    const output = renderList(many, 0, '', 10);
     expect(output).toContain('> _');
     expect(output).toContain('↕ navigate');
   });
 
   it('keeps the selected item visible when it is far down the list', () => {
-    const output = renderList(many, 29, '', 'repo', 10);
+    const output = renderList(many, 29, '', 10);
     expect(output).toContain('branch-29');
   });
 
   it('shows a down indicator but no up indicator at the top', () => {
-    const output = renderList(many, 0, '', 'repo', 10);
+    const output = renderList(many, 0, '', 10);
     expect(output).toContain('↓ more');
     expect(output).not.toContain('↑ more');
   });
 
   it('shows an up indicator once scrolled to the bottom', () => {
-    const output = renderList(many, 29, '', 'repo', 10);
+    const output = renderList(many, 29, '', 10);
     expect(output).toContain('↑ more');
     expect(output).not.toContain('↓ more');
   });
 
   it('pins the footer near the bottom (last row reserved) when content is shorter than the terminal', () => {
-    const lines = renderList(items, 0, '', 'repo', 20).split('\n');
+    const lines = renderList(items, 0, '', 20).split('\n');
     expect(lines).toHaveLength(19);
     expect(lines[lines.length - 1]).toContain('↕ navigate');
   });
@@ -326,7 +319,7 @@ describe('renderRepoPicker', () => {
   const repos = ['/projects/my-repo', '/projects/other-repo'];
 
   it('shows the info header', () => {
-    expect(renderRepoPicker(repos, 0, '')).toContain('Not in a git repository');
+    expect(renderRepoPicker(repos, 0, '')).toContain('Select a repo');
   });
 
   it('shows the search query', () => {

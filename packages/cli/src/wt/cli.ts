@@ -14,9 +14,10 @@ program
 program
   .command('create [branch]')
   .description('Create a new worktree')
-  .action(async (branch?: string) => {
+  .option('--repo <path>', 'Target repository path; skips the repo picker')
+  .action(async (branch: string | undefined, options: { repo?: string }) => {
     const { createWorktree } = await import('./commands/create.js');
-    await createWorktree(branch);
+    await createWorktree(branch, { repoRoot: options.repo });
   });
 
 program
@@ -24,13 +25,20 @@ program
   .description('Create a worktree and auto-start an AI agent in Zed (macOS)')
   .option(
     '--mode <mode>',
-    'Claude Code permission mode (default, plan, auto, etc.)',
-    'plan',
+    'Claude Code permission mode (default, plan, auto, etc.); overrides the configured agent_mode',
   )
+  .option('--repo <path>', 'Target repository path; skips the repo picker')
   .action(
-    async (branch: string, planPrompt: string, options: { mode: string }) => {
+    async (
+      branch: string,
+      planPrompt: string,
+      options: { mode?: string; repo?: string },
+    ) => {
       const { createAgentWorktree } = await import('./commands/agent.js');
-      await createAgentWorktree(branch, planPrompt, { mode: options.mode });
+      await createAgentWorktree(branch, planPrompt, {
+        mode: options.mode,
+        repoRoot: options.repo,
+      });
     },
   );
 

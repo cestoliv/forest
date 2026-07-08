@@ -59,12 +59,17 @@ export interface CreatedArtifacts {
  * When a mode is provided, injects `--permission-mode <mode>` into the command,
  * removing any existing `--permission-mode` flag from agentCommand to avoid
  * duplicates.
+ *
+ * When `appendPrompt` is false, the prompt is NOT appended/quoted — the caller
+ * has already placed it inside `agentCommand` (e.g. via a `{{prompt}}`
+ * template), so appending it again would emit it twice.
  */
 export function buildAgentTask(
   agentCommand: string,
   prompt: string,
   label: string,
   mode?: string,
+  appendPrompt = true,
 ): ZedTask {
   let finalCommand = agentCommand;
 
@@ -78,10 +83,12 @@ export function buildAgentTask(
     finalCommand = `${baseCommand} --permission-mode ${mode}`.trim();
   }
 
-  const escaped = prompt.replace(/'/g, "'\\''");
+  const command = appendPrompt
+    ? `${finalCommand} '${prompt.replace(/'/g, "'\\''")}'`
+    : finalCommand;
   return {
     label,
-    command: `${finalCommand} '${escaped}'`,
+    command,
     cwd: '$ZED_WORKTREE_ROOT',
     use_new_terminal: true,
     allow_concurrent_runs: false,
