@@ -1,0 +1,10 @@
+{
+  "name": "ide-toggler-linux",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GNOME Shell extension for ide-toggler, plus a Node test suite for its pure (gi-free) logic modules.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

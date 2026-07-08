@@ -1,0 +1,118 @@
+name: publish
+
+on:
+  push:
+    branches:
+      - main
+    paths: ['packages/cli/**']
+  pull_request:
+    types:
+      - labeled
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Release: pushing to main publishes the package.json version under `latest`.
+  # Skipped if that version is already on npm (bump version to cut a release).
+  release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC: npm trusted publishing
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24 # trusted publishing needs Node >= 22.14 / npm >= 11.5.1
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+          cache-dependency-path: packages/cli/package-lock.json
+      - run: npm ci
+        working-directory: packages/cli
+      - name: Resolve release
+        id: meta
+        working-directory: packages/cli
+        run: |
+          NAME=$(node -p "require('./package.json').name")
+          VERSION=$(node -p "require('./package.json').version")
+          if npm view "$NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "publish=no" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME@$VERSION already published — bump version to release."
+          else
+            echo "publish=yes" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish @latest (OIDC, with provenance)
+        if: steps.meta.outputs.publish == 'yes'
+        working-directory: packages/cli
+        run: npm publish --tag latest --access public
+
+  # Pre-release: add the `publish-dev` label to a PR to publish a unique
+  # prerelease version. It is NOT tagged `latest` or a pretend-stable `dev`
+  # channel — it gets a throwaway PR-scoped dist-tag, and the exact version
+  # is posted as a PR comment. The label is always removed after, so re-adding
+  # it triggers another publish.
+  dev:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.label.name == 'publish-dev'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC: npm trusted publishing
+      pull-requests: write # remove the publish-dev label
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+          cache-dependency-path: packages/cli/package-lock.json
+
+      - run: npm ci
+        working-directory: packages/cli
+
+      - name: Resolve prerelease version
+        id: meta
+        working-directory: packages/cli
+        run: |
+          BASE=$(node -p "require('./package.json').version")
+          SHA=$(git rev-parse --short HEAD)
+          PR=${{ github.event.pull_request.number }}
+          echo "version=$BASE-pr$PR.g$SHA" >> "$GITHUB_OUTPUT"
+          echo "tag=pr-$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Publish prerelease (OIDC, with provenance)
+        working-directory: packages/cli
+        run: |
+          npm version --no-git-tag-version --allow-same-version "${{ steps.meta.outputs.version }}"
+          npm publish --tag "${{ steps.meta.outputs.tag }}" --access public
+
+      - name: Comment published version on PR
+        if: success()
+        working-directory: packages/cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ steps.meta.outputs.version }}"
+          gh pr comment "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}" --body "📦 Published prerelease \`@cestoliv/forest@$V\`
+
+          \`\`\`bash
+          npm install -g @cestoliv/forest@$V
+          \`\`\`
+
+          Exact version pinned — this is **not** a stable channel. ([provenance](https://www.npmjs.com/package/@cestoliv/forest/v/$V))"
+
+      - name: Remove publish-dev label
+        if: always()
+        working-directory: packages/cli
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr edit "${{ github.event.pull_request.number }}" --remove-label publish-dev --repo "${{ github.repository }}"

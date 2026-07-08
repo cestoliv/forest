@@ -1,0 +1,147 @@
+// src/lib/config.test.ts
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  createStore,
+  DEFAULT_CONFIG,
+  getConfigFilePath,
+  getEffectiveConfig,
+  getGlobalConfig,
+  setGlobalConfig,
+} from './config.js';
+
+let tmpDir: string;
+
+beforeEach(() => {
+  tmpDir = mkdtempSync(path.join(tmpdir(), 'wt-config-'));
+});
+
+afterEach(() => {
+  rmSync(tmpDir, { recursive: true });
+});
+
+describe('createStore', () => {
+  it('initialises with default config', () => {
+    const store = createStore(tmpDir);
+    expect(store.store).toMatchObject(DEFAULT_CONFIG);
+  });
+});
+
+describe('getGlobalConfig', () => {
+  it('returns full config with defaults', () => {
+    const store = createStore(tmpDir);
+    const config = getGlobalConfig(store);
+    expect(config.ide).toBe('zed');
+    expect(config.agent_command).toBe('claude');
+    expect(config.agent_mode).toBe('default');
+    expect(config.auto_refresh_minutes).toBe(5);
+    expect(config.repos).toEqual([]);
+    expect(config.repo_overrides).toEqual({});
+  });
+});
+
+describe('setGlobalConfig', () => {
+  it('updates a top-level field', () => {
+    const store = createStore(tmpDir);
+    setGlobalConfig({ ide: 'code' }, store);
+    expect(getGlobalConfig(store).ide).toBe('code');
+  });
+
+  it('deep-merges repo_overrides', () => {
+    const store = createStore(tmpDir);
+    setGlobalConfig({ repo_overrides: { '/a': { ide: 'code' } } }, store);
+    setGlobalConfig({ repo_overrides: { '/b': { ide: 'zed' } } }, store);
+    const config = getGlobalConfig(store);
+    expect(config.repo_overrides['/a']).toBeDefined();
+    expect(config.repo_overrides['/b']).toBeDefined();
+  });
+
+  it('deep-merges fields within the same repo override', () => {
+    const store = createStore(tmpDir);
+    setGlobalConfig({ repo_overrides: { '/r': { ide: 'code' } } }, store);
+    setGlobalConfig(
+      { repo_overrides: { '/r': { base_branch: 'main' } } },
+      store,
+    );
+    expect(getGlobalConfig(store).repo_overrides['/r']).toEqual({
+      ide: 'code',
+      base_branch: 'main',
+    });
+  });
+});
+
+describe('getEffectiveConfig', () => {
+  it('returns global defaults when no repo override exists', () => {
+    const store = createStore(tmpDir);
+    const config = getEffectiveConfig('/no/override', store);
+    expect(config.ide).toBe('zed');
+    expect(config.setup_commands).toEqual([]);
+    expect(config.agent_mode).toBe('default');
+  });
+
+  it('reads auto_refresh_minutes from global config only (not per-repo)', () => {
+    const store = createStore(tmpDir);
+    expect(getGlobalConfig(store).auto_refresh_minutes).toBe(5);
+    setGlobalConfig({ auto_refresh_minutes: 10 }, store);
+    expect(getGlobalConfig(store).auto_refresh_minutes).toBe(10);
+    // It is no longer part of the per-repo effective config surface.
+    expect(
+      'auto_refresh_minutes' in getEffectiveConfig('/my/repo', store),
+    ).toBe(false);
+  });
+
+  it('overrides global fields with repo-specific values', () => {
+    const store = createStore(tmpDir);
+    setGlobalConfig(
+      {
+        repo_overrides: {
+          '/my/repo': {
+            ide: 'code',
+            setup_commands: ['yarn'],
+            agent_mode: 'plan',
+          },
+        },
+      },
+      store,
+    );
+    const config = getEffectiveConfig('/my/repo', store);
+    expect(config.ide).toBe('code');
+    expect(config.setup_commands).toEqual(['yarn']);
+    expect(config.worktree_path).toBe('../');
+    expect(config.agent_mode).toBe('plan');
+  });
+
+  it('repo override does not affect other repos', () => {
+    const store = createStore(tmpDir);
+    setGlobalConfig({ repo_overrides: { '/my/repo': { ide: 'code' } } }, store);
+    const other = getEffectiveConfig('/other/repo', store);
+    expect(other.ide).toBe('zed');
+  });
+});
+
+describe('getConfigFilePath', () => {
+  it('returns a path ending with config.json', () => {
+    const p = getConfigFilePath();
+    expect(p).toMatch(/config\.json$/);
+  });
+});
+
+describe('createStore error handling', () => {
+  it('throws a clear error on malformed config JSON', () => {
+    writeFileSync(path.join(tmpDir, 'config.json'), '{bad json!!!}');
+
+    let thrown: unknown;
+    try {
+      createStore(tmpDir);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain('Error reading config file');
+    expect(message).toContain(tmpDir);
+  });
+});

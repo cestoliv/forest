@@ -1,0 +1,252 @@
+---
+name: wt-worktree-manager
+description: Use the wt CLI to create, browse, open, and delete git worktrees across repos. Use when the user asks to manage worktrees, create isolated branches, or configure worktree defaults.
+---
+
+# wt — Git Worktree Manager
+
+`wt` is a CLI for managing git worktrees. It provides an interactive TUI to browse, create, open in your IDE, and delete worktrees across multiple repos.
+
+## Commands
+
+### `wt` (no subcommand)
+
+Launch the interactive TUI. Always shows worktrees across all registered repos, no matter where it is run. The current repo (if any) is auto-registered for discovery, but is never used to scope the list to a single repo.
+
+**Keybindings in the TUI:**
+
+- Arrow keys — navigate
+- `Enter` — open worktree in IDE (exits the TUI)
+- `D` — delete worktree (the main worktree is tagged `(main)` and cannot be deleted — only linked worktrees can)
+- `P` — prune all merged or closed-PR worktrees (per-branch confirmation)
+- `C` — create a new worktree
+- `A` — create a worktree and start an AI agent in it
+- type to search · `Backspace` — edit search
+- `Q` / `Esc` — quit
+
+`C` and `A` are step-by-step wizards. They **always** start by prompting for the
+repo (picker), then the branch. `A` then adds two more steps:
+
+- `C` — **worktree (repo → branch)**
+- `A` — **worktree (repo → branch) → plan prompt → permission mode**
+
+Pressing `Esc` at any step goes back to the previous step (your earlier answers
+are preserved); pressing `Esc` on the first step returns to the list.
+
+After a create or agent action the TUI **refreshes and stays open** on the list
+(your search and cursor are preserved) rather than exiting — only `Enter` (open)
+and `Q`/`Esc` exit.
+
+Because `a`/`A`, `c`/`C`, `d`/`D`, and `p`/`P` are reserved as command keys,
+those letters can't be typed into the search box.
+
+### `wt create [branch] [--repo <path>]`
+
+Create a new worktree. Always prompts you to pick the target repo from the registered repos first (the current repo is auto-registered for discovery but never assumed). If `branch` is omitted, prompts for it too. In a non-interactive shell it exits non-zero because the repo picker needs a TTY.
+
+Pass `--repo <path>` to target a repo explicitly and skip the picker. The path is resolved against the current directory and validated as a git repo root; a path that is not a git repository errors (`✗ <path> is not a git repository`) and nothing is created. The resolved repo is also registered for future discovery.
+
+The worktree is created as a sibling directory to the repo: `<parent>/<repo-name>-<branch-name>`.
+
+After creation, `wt` runs any configured `setup_commands` and opens the worktree in your IDE.
+
+If the worktree path already exists, `wt create` doesn't error — it prompts you
+to **open it in the IDE** or **quit**. (In a non-interactive shell it errors
+with a non-zero exit instead of prompting.)
+
+### `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>]`
+
+Create a worktree (same as `wt create`) **and** auto-start an AI agent in Zed's
+integrated terminal, pre-filled with `<plan_prompt>` and left interactive for
+you to take over.
+
+```bash
+wt agent feature/login 'Read the codebase, then propose a plan for login.'
+wt agent feature/fix 'Fix the bug in payment processing' --mode auto
+wt agent refactor/api 'Refactor the API layer' --mode default
+wt agent feature/login 'Plan login' --repo ~/dev/my-project   # skip the picker
+```
+
+Like `wt create`, it always prompts for the target repo unless `--repo <path>`
+is given (same validation: the path must be a git repo root, else it errors and
+creates nothing).
+
+The `--mode` flag sets Claude Code's permission mode (defaults to `default`;
+change the default with the `agent_mode` config key):
+
+- `default` — Standard interactive mode with approval for each action (default)
+- `acceptEdits` — Allow file changes but keep command execution controlled
+- `plan` — Architecture-first mode with no surprise mutations
+- `auto` — Claude's safety model makes decisions instead of prompting
+- `dontAsk` — Minimal interruptions in trusted environments
+- `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
+
+It writes a temporary `.zed/tasks.json` running
+`<agent_command> --permission-mode <mode> '<plan_prompt>'`, ensures a global Zed keymap chord
+(`agent_trigger_chord`) spawns that task, opens Zed, presses the chord via
+`osascript`, then removes the temporary task so the repo is left clean.
+
+**macOS + Zed only.** Requires Accessibility permission for the app that runs
+`wt` (Zed itself, when run from its integrated terminal). If it isn't granted,
+`wt agent` opens the _Privacy & Security → Accessibility_ settings pane and waits
+for you to grant it and confirm, then retries automatically. On other platforms
+(or when `ide` is not `zed`) the worktree is still created and opened, but the
+agent is not auto-started.
+
+Over SSH it still works, provided the same user has an active graphical login on
+the Mac: the keystroke is run inside the GUI session via Launch Services
+(`open -a Terminal` briefly flashes a Terminal window). Grant Accessibility to
+Terminal (not Zed) the first time. With no one logged in graphically there is
+nothing to drive, so it falls back to the manual "press the chord in Zed"
+message.
+
+If the worktree path already exists, `wt agent` prompts you to **open it in the
+IDE**, **open it and start the agent**, or **quit** — instead of erroring. (In a
+non-interactive shell it errors with a non-zero exit instead of prompting.)
+
+### `wt prune`
+
+Remove every worktree whose branch has already been merged into the base
+branch (`base_branch`, default `origin/main`), **or** whose PR/MR was closed
+without merging (dead branch). Each candidate is confirmed
+individually — and force-confirmed when git refuses (submodules / uncommitted
+changes), exactly like a manual `d` delete. The branch itself is left intact;
+only the worktree is removed.
+
+```bash
+wt prune   # review and remove merged worktrees, one prompt per branch
+```
+
+Merge detection works in tiers. A branch whose diff already exists in base by
+patch id (via `git cherry`, so a single-commit branch **squash-merged** through a
+PR is recognized offline) is merged. For the ambiguous case — the branch tip is
+an ancestor of base but 0 commits ahead, which a **fast-forward / merge-commit**
+merge and a worktree holding only *uncommitted* work both produce — it consults
+the **forge**: a merged PR/MR (via `gh` for GitHub, `glab` for GitLab incl.
+self-hosted, auto-detected from the remote) is the only reliable signal. If the
+forge can't answer (CLI missing, offline, branch unpushed, no merged PR/MR) the
+branch is left alone. A worktree still sitting exactly on the base commit is
+never offered. Separately, a branch is pruned when its PR/MR was **closed
+without merging** — a forge-only signal that does no git ancestry checks (so it
+can prune a branch that is *ahead* of base), gated only by the same
+pushed-branch guard and failing closed on any error. `wt prune` also best-effort
+fetches the remote first so detection
+sees up-to-date refs; if the
+base ref can't be resolved (e.g. offline), nothing is removed. Always runs across
+all registered repos (each against its own `base_branch`). The TUI exposes the
+same action under the `p` key.
+
+### `wt config`
+
+Open the global config file in `$EDITOR` (defaults to `nano`).
+
+```bash
+wt config          # open in editor
+wt config --path   # print config file path only
+```
+
+### `wt skill`
+
+Print this skill file to stdout. Useful for piping to agents or copying to a project.
+
+## Configuration
+
+Config is stored as JSON. Get the path with `wt config --path`.
+
+### Schema
+
+| Key                   | Type       | Default                           | Description                                                                                                                                                               |
+| --------------------- | ---------- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `worktree_path`       | `string`   | `"../"`                           | Where to place new worktrees, relative to the repo root                                                                                                                   |
+| `base_branch`         | `string`   | `"origin/main"`                   | Branch to base new worktrees on                                                                                                                                           |
+| `setup_commands`      | `string[]` | `[]`                              | Commands to run in a new worktree after creation (e.g. `["npm install"]`). Supports `{{…}}` templating                                                                    |
+| `teardown_commands`   | `string[]` | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`); on failure you are prompted whether to delete anyway. Supports `{{…}}` templating |
+| `ide`                 | `string`   | `"zed"`                           | IDE command to open worktrees with                                                                                                                                        |
+| `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command                                                                                                                                       |
+| `agent_command`       | `string`   | `"claude"`                        | Base command `wt agent` runs in Zed; `--permission-mode <mode>` is injected (any existing one replaced). Supports `{{…}}` templating, including `{{prompt}}`: if present, the plan prompt is substituted there; if absent, `<plan_prompt>` is appended single-quoted |
+| `agent_mode`          | `string`   | `"default"`                       | Default Claude Code permission mode for `wt agent`; the `--mode` flag overrides it. One of `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`        |
+| `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
+| `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh. **Global only** — not per-repo overridable |
+| `repos`               | `string[]` | `[]`                              | Registered repo paths (auto-populated on first use)                                                                                                                       |
+| `repo_overrides`      | `object`   | `{}`                              | Per-repo config overrides (see below)                                                                                                                                     |
+
+### Per-repo overrides
+
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_mode`, `agent_trigger_chord`) for a specific repo. `auto_refresh_minutes` is global-only and cannot be overridden per repo:
+
+```json
+{
+  "base_branch": "origin/main",
+  "ide": "zed",
+  "repo_overrides": {
+    "/path/to/my-repo": {
+      "base_branch": "origin/develop",
+      "setup_commands": ["npm install", "npm run build"]
+    }
+  }
+}
+```
+
+### Command templating
+
+`setup_commands`, `teardown_commands`, and `agent_command` are expanded for
+`{{…}}` placeholders just before they run. Whitespace inside the braces is
+allowed (`{{ branch }}` == `{{branch}}`) and names are case-sensitive. An
+unknown or unavailable variable is left **verbatim** (never blanked out).
+Values are inserted raw (no shell-escaping), so quote them yourself if a value
+could contain spaces.
+
+| Variable        | Expands to                              | Available in                                     |
+| --------------- | --------------------------------------- | ------------------------------------------------ |
+| `{{branch}}`    | The worktree's branch name              | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{project}}`   | The repo directory name (basename)      | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{path}}`      | Absolute path to the worktree           | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{repo_root}}` | Absolute path to the repo root          | `setup_commands`, `teardown_commands`, `agent_command` |
+| `{{prompt}}`    | The agent plan prompt                   | `agent_command` only                             |
+
+In `agent_command`, `{{prompt}}` is replaced by the plan prompt: if you include
+it, the prompt is placed exactly there (and is **not** also auto-appended). If
+you omit `{{prompt}}`, the prompt is appended automatically (single-quoted) at
+the end, as before.
+
+```json
+{
+  "agent_command": "claude --remote-control {{branch}}",
+  "setup_commands": ["direnv allow {{path}}"]
+}
+```
+
+## Common workflows
+
+### Create a worktree for a new feature
+
+```bash
+cd /path/to/repo
+wt create feature/my-branch
+```
+
+### Configure setup commands for a repo
+
+```bash
+wt config
+# Then add to the JSON:
+# "repo_overrides": {
+#   "/path/to/repo": {
+#     "setup_commands": ["npm install"]
+#   }
+# }
+```
+
+### Pass the branch to your agent (templating)
+
+```bash
+wt config
+# Then set:
+# "agent_command": "claude --remote-control {{branch}}"
+```
+
+`wt agent feature/login '…'` now runs `claude --remote-control feature/login …`.
+
+### Browse all worktrees across repos
+
+Run `wt` from anywhere — it always lists worktrees from all registered repos.

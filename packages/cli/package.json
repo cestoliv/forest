@@ -1,0 +1,51 @@
+{
+  "name": "@cestoliv/forest",
+  "version": "0.1.0",
+  "description": "wt (git worktrees + AI agents) and agent-spawner (Todoist daemon) in one package.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cestoliv/forest.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "bin": {
+    "wt": "./dist/wt.js",
+    "agent-spawner": "./dist/spawner.js"
+  },
+  "files": [
+    "dist",
+    "SKILL.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "dev:wt": "tsx src/wt/cli.ts",
+    "dev:spawner": "tsx src/spawner/cli.ts",
+    "build": "tsup && chmod +x dist/wt.js dist/spawner.js",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome format --write ."
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.0.1",
+    "commander": "^14.0.3",
+    "conf": "^15.1.0",
+    "fuse.js": "^7.1.0",
+    "jsonc-parser": "^3.3.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.4",
+    "@types/node": "^22.0.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "token": "",
+  "pollIntervalSeconds": 600,
+  "branchPrefix": "agent/",
+  "promptTemplate": "Let's tackle this task {{url}}",
+  "labels": {
+    "ready": "2183654821",
+    "working": "2184160737",
+    "error": "2184160738"
+  },
+  "rules": [
+    {
+      "project": "6cFvM833Wp4whXXW",
+      "labels": ["2183895737"],
+      "path": "~/dev/overload-mobile"
+    },
+    {
+      "project": "6cFvM833Wp4whXXW",
+      "labels": ["2183895740"],
+      "path": "~/dev/overload-backend"
+    },
+    { "project": "6gc2v7V4rwXGjxh8", "path": "~/dev/overload-website" }
+  ]
+}
