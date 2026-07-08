@@ -23,8 +23,8 @@ jobs:
       contents: read
       id-token: write # OIDC: npm trusted publishing
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24 # trusted publishing needs Node >= 22.14 / npm >= 11.5.1
           registry-url: https://registry.npmjs.org
@@ -64,12 +64,12 @@ jobs:
       id-token: write # OIDC: npm trusted publishing
       pull-requests: write # remove the publish-dev label
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org

@@ -56,6 +56,11 @@ describe('runAgent (E2E, real git)', () => {
 
     expect(res.ok).toBe(true);
 
+    // create.ts's own progress lines (prepareWorktree/openConfiguredIde) must
+    // reach the daemon via the injected `report`, not escape to console.* —
+    // otherwise they'd be missing from the Todoist "Agent Error" comment.
+    expect(res.output).toContain('Created worktree');
+
     // real worktree created by the real prepareWorktree via the in-process
     // path: sibling <parent>/<repo>-<branch>.
     const wtPath = path.join(tmpDir, 'my-repo-e2e-feat');

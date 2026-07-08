@@ -13,7 +13,7 @@ jobs:
       cli: ${{ steps.f.outputs.cli }}
       ide: ${{ steps.f.outputs.ide }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
         id: f
         with:
@@ -31,8 +31,8 @@ jobs:
       run:
         working-directory: packages/cli
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
@@ -51,7 +51,7 @@ jobs:
       run:
         working-directory: apps/ide-toggler/macos
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - run: swift --version
       - run: swift build
       - run: swift test
@@ -64,11 +64,11 @@ jobs:
       run:
         working-directory: apps/ide-toggler/linux
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: node --test

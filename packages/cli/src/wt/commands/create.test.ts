@@ -271,19 +271,21 @@ describe('createWorktree (fetch)', () => {
       store,
     );
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reported: string[] = [];
 
     // Fetch should target "origin" (extracted correctly), but the ref
     // "origin/<branch>/nested" doesn't exist, so worktree creation fails
     await expect(
-      createWorktree('feature', { repoRoot: cloneDir, store }),
+      createWorktree('feature', {
+        repoRoot: cloneDir,
+        store,
+        report: (m) => reported.push(m),
+      }),
     ).rejects.toThrow();
 
     // Key assertion: no "Could not fetch" warning — the remote "origin" was
     // found and fetched successfully despite the nested slash in base_branch
-    const warnCalls = warnSpy.mock.calls.flat().join(' ');
-    expect(warnCalls).not.toContain('Could not fetch');
-    warnSpy.mockRestore();
+    expect(reported.join(' ')).not.toContain('Could not fetch');
   });
 
   it('warns (no remote) and throws if base branch is also invalid', async () => {
@@ -299,18 +301,19 @@ describe('createWorktree (fetch)', () => {
       store,
     );
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const reported: string[] = [];
 
     // The repo has no "nonexistent-remote" remote, so fetch is skipped with a
     // "no remote" warning; creation still fails because the base ref is invalid.
     await expect(
-      createWorktree('feature', { repoRoot: repoDir, store }),
+      createWorktree('feature', {
+        repoRoot: repoDir,
+        store,
+        report: (m) => reported.push(m),
+      }),
     ).rejects.toThrow();
 
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining('has no "nonexistent-remote" remote'),
-    );
-    warnSpy.mockRestore();
+    expect(reported.join(' ')).toContain('has no "nonexistent-remote" remote');
   });
 });
 
@@ -356,13 +359,15 @@ describe('createWorktree (repo picker)', () => {
 
   it('prints error and returns when no repos are registered', async () => {
     const store = createStore(path.join(tmpDir, 'config'));
-    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const reported: string[] = [];
 
-    await createWorktree('feature', { cwd: tmpdir(), store });
+    await createWorktree('feature', {
+      cwd: tmpdir(),
+      store,
+      report: (m) => reported.push(m),
+    });
 
-    expect(consoleSpy).toHaveBeenCalledWith(
-      expect.stringContaining('No repos registered'),
-    );
+    expect(reported.join(' ')).toContain('No repos registered');
   });
 
   it('creates worktree in the repo returned by repoPicker', async () => {

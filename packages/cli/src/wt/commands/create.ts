@@ -74,6 +74,7 @@ export async function prepareWorktree(
     repoPicker = runRepoPicker,
     branchInput = runBranchInput,
   } = options;
+  const report = options.report ?? ((m: string) => console.log(m));
 
   let repoRoot: string | undefined;
 
@@ -102,7 +103,7 @@ export async function prepareWorktree(
   } else {
     const repos = getRegisteredRepos(store);
     if (repos.length === 0) {
-      console.error(
+      report(
         pc.red(
           'No repos registered. cd into a repo and run wt create to get started.',
         ),
@@ -160,7 +161,7 @@ export async function prepareWorktree(
 
   if (parts.length === 2) {
     if (!remoteExists(repoRoot, remote)) {
-      console.warn(
+      report(
         pc.yellow(
           `⚠ ${path.basename(repoRoot)} has no "${remote}" remote — falling back to local git`,
         ),
@@ -169,7 +170,7 @@ export async function prepareWorktree(
       try {
         fetchRemote(repoRoot, remote);
       } catch (err) {
-        console.warn(
+        report(
           pc.yellow(
             `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
           ),
@@ -187,10 +188,10 @@ export async function prepareWorktree(
 
   setUpstreamTracking(worktreePath, branch, remote);
 
-  console.log(pc.green(`✓ Created worktree at ${worktreePath}`));
+  report(pc.green(`✓ Created worktree at ${worktreePath}`));
 
   if (config.setup_commands.length > 0) {
-    console.log(pc.dim('Running setup commands...'));
+    report(pc.dim('Running setup commands...'));
     const vars = buildTemplateVars({ branch, repoRoot, worktreePath });
     const result = await runCommands(
       config.setup_commands.map((c) => expandTemplate(c, vars)),
@@ -242,11 +243,12 @@ export async function promptExistingWorktree(
 export async function openConfiguredIde(
   config: RepoConfig,
   worktreePath: string,
+  report: (msg: string) => void = (m) => console.log(m),
 ): Promise<boolean> {
   if (!config.ide) return false;
   const opened = await openIde(config.ide, config.ide_open_args, worktreePath);
   if (opened) {
-    console.log(pc.green(`✓ Opened ${config.ide}`));
+    report(pc.green(`✓ Opened ${config.ide}`));
   }
   return opened;
 }
@@ -255,6 +257,7 @@ export async function createWorktree(
   branch: string | undefined,
   options: CreateOptions = {},
 ): Promise<void> {
+  const report = options.report ?? ((m: string) => console.log(m));
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
 
@@ -268,5 +271,5 @@ export async function createWorktree(
     if (action !== 'open') return;
   }
 
-  await openConfiguredIde(config, worktreePath);
+  await openConfiguredIde(config, worktreePath, report);
 }

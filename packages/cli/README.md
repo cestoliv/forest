@@ -238,6 +238,43 @@ names are case-sensitive. An unknown or unavailable variable is left
 **verbatim** — never blanked out. Values are inserted raw (no shell-escaping),
 so quote them yourself if a value might contain spaces.
 
+## agent-spawner
+
+A macOS daemon that polls Todoist for tasks labelled `Agent Ready` and
+dispatches each one to a `wt agent` worktree + Zed session — in-process, via
+the same `runAgent` seam `wt agent` itself uses (no subprocess, no version
+skew between the daemon and `wt`). After dispatching it swaps the label to
+`Agent Working`; on failure, or when no routing rule matches, it swaps to
+`Agent Error` with an explanatory comment and leaves `Agent Ready` so it can
+be retried. See `packages/cli/CLAUDE.md`'s `## agent-spawner` section for the
+full architecture.
+
+Installed by the same `npm install -g @cestoliv/forest` above.
+
+```bash
+agent-spawner run                # foreground (use this first to grant Accessibility)
+agent-spawner install            # launchd auto-start on login
+agent-spawner uninstall          # remove the launchd LaunchAgent
+agent-spawner logs               # tail the daemon log
+agent-spawner config [--path]    # open config in $EDITOR, or print its path
+```
+
+### Configuration
+
+Config essentials (`agent-spawner config --path` for the file location;
+`config.example.json` is a ready-made starting point):
+
+- **`token`** — a Todoist API token (or set `TODOIST_API_TOKEN`)
+- **`labels`** — the `ready` / `working` / `error` Todoist label ids the
+  daemon reads and swaps
+- **`rules`** — ordered routing rules, each `{ project, labels?, path }`:
+  the first rule whose Todoist project id matches (and whose `labels`, if
+  given, are all present on the task) wins, and `path` is the absolute (or
+  `~`-expandable) local repo root to dispatch into
+- **`pollIntervalSeconds`** (default `600`) and **`promptTemplate`** (built
+  with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, `{{projectId}}`
+  placeholders) round out the poll loop and the prompt sent to `wt agent`
+
 ## Pre-release builds
 
 Add the `publish-dev` label to a PR to publish that branch as a unique, pinned

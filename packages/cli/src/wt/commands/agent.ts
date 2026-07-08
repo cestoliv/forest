@@ -100,7 +100,7 @@ export async function createAgentWorktree(
     const action = await prompt(worktreePath, { allowAgent: true });
     if (action === 'quit') return;
     if (action === 'open') {
-      await openConfiguredIde(config, worktreePath);
+      await openConfiguredIde(config, worktreePath, report);
       return;
     }
   }
@@ -138,14 +138,14 @@ async function startAgentInWorktree(
         `⚠ Agent auto-start requires Zed (ide is "${config.ide}"). Opening without starting the agent.`,
       ),
     );
-    await openConfiguredIde(config, worktreePath);
+    await openConfiguredIde(config, worktreePath, report);
     return;
   }
 
   if (!config.agent_command) {
     report(pc.red('No agent_command configured. Set it with `wt config`.'));
     // The worktree is already created; still open it so the user can work in it.
-    await openConfiguredIde(config, worktreePath);
+    await openConfiguredIde(config, worktreePath, report);
     return;
   }
 
@@ -168,7 +168,7 @@ async function startAgentInWorktree(
   const created = writeAgentTask(worktreePath, task);
   const keymapOk = ensureKeymap(config.agent_trigger_chord, AGENT_TASK_LABEL);
 
-  const opened = await openConfiguredIde(config, worktreePath);
+  const opened = await openConfiguredIde(config, worktreePath, report);
   if (!opened) {
     report(pc.red('✗ Could not open Zed.'));
     cleanupAgentTask(worktreePath, AGENT_TASK_LABEL, created);
