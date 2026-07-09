@@ -9,13 +9,17 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import * as clack from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
-import type { Worktree } from '../lib/git.js';
+import { removeWorktree, type Worktree } from '../lib/git.js';
+import { stopOrcaWorktree } from '../lib/orca.js';
+import { runCommands } from '../lib/setup.js';
 import {
   deleteWorktree,
   prepareListItems,
   selectWipeCandidates,
+  wipeWorktrees,
 } from './list.js';
 
 // deleteWorktree prompts to confirm removal; auto-confirm so the teardown path
@@ -25,6 +29,30 @@ vi.mock('@clack/prompts', () => ({
   isCancel: vi.fn(() => false),
   log: { warn: vi.fn() },
 }));
+
+// No `orca` process is ever spawned from tests; the real behaviour lives in
+// orca.test.ts. Here we only observe that deleteWorktree calls it (and when).
+vi.mock('../lib/orca.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/orca.js')>()),
+  stopOrcaWorktree: vi.fn(async () => {}),
+}));
+
+// Keep the real implementations (the git/teardown behaviour is under test) but
+// make the calls observable so their relative ordering can be asserted.
+vi.mock('../lib/git.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/git.js')>();
+  return { ...actual, removeWorktree: vi.fn(actual.removeWorktree) };
+});
+vi.mock('../lib/setup.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/setup.js')>();
+  return { ...actual, runCommands: vi.fn(actual.runCommands) };
+});
+
+/** vitest records a global, monotonically increasing invocation index per call. */
+function firstCallOrder(fn: unknown): number {
+  return (fn as { mock: { invocationCallOrder: number[] } }).mock
+    .invocationCallOrder[0];
+}
 
 let tmpDir: string;
 let repoDir: string;
@@ -146,6 +174,133 @@ describe('deleteWorktree (teardown templating)', () => {
 
     expect(removed).toBe(true);
     expect(existsSync(path.join(tmpDir, 'feature.teardown'))).toBe(true);
+  });
+});
+
+describe('deleteWorktree (Orca teardown)', () => {
+  beforeEach(() => {
+    vi.mocked(stopOrcaWorktree).mockClear();
+    vi.mocked(removeWorktree).mockClear();
+    vi.mocked(runCommands).mockClear();
+    vi.mocked(stopOrcaWorktree).mockImplementation(async () => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A worktree on `feature`, whose branch is patch-present in `main` (merged). */
+  function makeMergedWorktree(): Worktree {
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync('git branch -M main', { cwd: repoDir });
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    writeFileSync(path.join(wtPath, 'f.txt'), 'x');
+    execSync('git add .', { cwd: wtPath });
+    execSync('git commit -m "feat"', { cwd: wtPath });
+    // Advance main first so the cherry-pick can't fast-forward, then land the
+    // same patch under a different sha (the squash-merge shape `git cherry` sees).
+    writeFileSync(path.join(repoDir, 'other.txt'), 'y');
+    execSync('git add .', { cwd: repoDir });
+    execSync('git commit -m "other"', { cwd: repoDir });
+    execSync('git cherry-pick feature', { cwd: repoDir });
+    return {
+      path: wtPath,
+      branch: 'feature',
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+  }
+
+  it('stops the worktree in Orca before teardown commands and before git removal', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ teardown_commands: ['true'] }, store);
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+
+    const item: Worktree = {
+      path: wtPath,
+      branch: 'feature',
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+    expect(await deleteWorktree(item, store)).toBe(true);
+
+    expect(stopOrcaWorktree).toHaveBeenCalledWith({ worktreePath: wtPath });
+    expect(firstCallOrder(stopOrcaWorktree)).toBeLessThan(
+      firstCallOrder(runCommands),
+    );
+    expect(firstCallOrder(runCommands)).toBeLessThan(
+      firstCallOrder(removeWorktree),
+    );
+  });
+
+  /** A plain (unmerged) worktree on `feature`, for the confirm-decline tests. */
+  function makeWorktree(): Worktree {
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    return {
+      path: wtPath,
+      branch: 'feature',
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+  }
+
+  it('never stops the worktree in Orca when the delete confirm is declined', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ teardown_commands: ['true'] }, store);
+    vi.mocked(clack.confirm).mockResolvedValueOnce(false);
+
+    expect(await deleteWorktree(makeWorktree(), store)).toBe(false);
+
+    expect(stopOrcaWorktree).not.toHaveBeenCalled();
+    expect(runCommands).not.toHaveBeenCalled();
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('never stops the worktree in Orca when the delete confirm is cancelled', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ teardown_commands: ['true'] }, store);
+    vi.mocked(clack.isCancel).mockReturnValueOnce(true);
+
+    expect(await deleteWorktree(makeWorktree(), store)).toBe(false);
+
+    expect(stopOrcaWorktree).not.toHaveBeenCalled();
+    expect(removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it('removes the worktree even when the Orca stop throws', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    vi.mocked(stopOrcaWorktree).mockRejectedValueOnce(
+      new Error('orca blew up'),
+    );
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+
+    const item: Worktree = {
+      path: wtPath,
+      branch: 'feature',
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+    expect(await deleteWorktree(item, store)).toBe(true);
+    expect(removeWorktree).toHaveBeenCalled();
+    expect(existsSync(wtPath)).toBe(false);
+  });
+
+  it('also runs on the prune path (wipeWorktrees)', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const item = makeMergedWorktree();
+    setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
+
+    const removed = await wipeWorktrees([item], store);
+
+    expect(removed.map((w) => w.branch)).toEqual(['feature']);
+    expect(stopOrcaWorktree).toHaveBeenCalledWith({
+      worktreePath: item.path,
+    });
   });
 });
 

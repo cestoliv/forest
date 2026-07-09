@@ -11,6 +11,8 @@ export interface RunAgentOptions {
   branch: string;
   prompt: string;
   mode?: string;
+  /** IDE to launch (e.g. `zed`, `orca`); overrides the configured `ide`. */
+  ide?: string;
   /** Injected config store for tests; production omits it and uses the global store. */
   store?: ConfigStore;
 }
@@ -31,6 +33,8 @@ export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
       repoRoot: opts.repoPath,
       // Undefined mode lets createAgentWorktree resolve config.agent_mode ?? 'default'.
       mode: opts.mode,
+      // Undefined ide lets createAgentWorktree fall back to config.ide.
+      ide: opts.ide,
       report,
       store: opts.store,
     });

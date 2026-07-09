@@ -7,6 +7,7 @@ import { confirm } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import { openIde } from '../lib/ide.js';
+import { openWorktreeInOrca, startAgentInOrca } from '../lib/orca.js';
 import {
   buildAgentTask,
   cleanupAgentTask,
@@ -40,6 +41,18 @@ vi.mock('../lib/zed.js', async (importOriginal) => {
     cleanupAgentTask: vi.fn(),
     openAccessibilitySettings: vi.fn(),
     isHeadlessSession: vi.fn(() => false),
+  };
+});
+
+// Keep the pure builders (buildAgentCommandLine/buildOrcaCommands) real — the
+// real buildAgentTask above depends on buildAgentCommandLine — and stub only the
+// side-effecting Orca launch so no `orca` process is spawned.
+vi.mock('../lib/orca.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/orca.js')>();
+  return {
+    ...actual,
+    startAgentInOrca: vi.fn(async () => true),
+    openWorktreeInOrca: vi.fn(async () => true),
   };
 });
 
@@ -472,5 +485,128 @@ describe('createAgentWorktree (existing worktree)', () => {
     expect(writeAgentTask).toHaveBeenCalled();
     expect(triggerChord).toHaveBeenCalled();
     expect(cleanupAgentTask).toHaveBeenCalled();
+  });
+});
+
+describe('createAgentWorktree (ide selection)', () => {
+  it("starts the agent in Orca (not Zed) when config ide is 'orca'", async () => {
+    const store = configure({ ide: 'orca' });
+
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
+
+    expect(startAgentInOrca).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: repoDir,
+        worktreePath: expect.any(String),
+        commandLine: "claude --permission-mode default 'do stuff'",
+      }),
+    );
+    expect(writeAgentTask).not.toHaveBeenCalled();
+    expect(triggerChord).not.toHaveBeenCalled();
+  });
+
+  it('--ide orca overrides a configured zed', async () => {
+    const store = configure({ ide: 'zed' });
+
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      ide: 'orca',
+    });
+
+    expect(startAgentInOrca).toHaveBeenCalled();
+    expect(writeAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('--ide zed overrides a configured orca', async () => {
+    vi.useFakeTimers();
+    const store = configure({ ide: 'orca' });
+
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      ide: 'zed',
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(writeAgentTask).toHaveBeenCalled();
+    expect(triggerChord).toHaveBeenCalled();
+    expect(startAgentInOrca).not.toHaveBeenCalled();
+  });
+
+  it('falls back to opening the IDE for an unknown ide (neither zed nor orca)', async () => {
+    const store = configure({ ide: 'zed' });
+
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      ide: 'vscode',
+    });
+
+    expect(openIde).toHaveBeenCalledWith('vscode', [], expect.any(String));
+    expect(startAgentInOrca).not.toHaveBeenCalled();
+    expect(writeAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('opens the worktree in Orca (no agent) on a plain create with --ide orca', async () => {
+    const { createWorktree } = await import('./create.js');
+    const store = configure({ ide: 'zed' });
+
+    await createWorktree('feature', {
+      repoRoot: repoDir,
+      store,
+      ide: 'orca',
+    });
+
+    expect(openWorktreeInOrca).toHaveBeenCalledWith(
+      expect.objectContaining({ repoRoot: repoDir }),
+    );
+    expect(openIde).not.toHaveBeenCalled();
+  });
+
+  it('forwards focus:true to the Orca agent launch when set (interactive)', async () => {
+    const store = configure({ ide: 'orca' });
+
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      focus: true,
+    });
+
+    expect(startAgentInOrca).toHaveBeenCalledWith(
+      expect.objectContaining({ focus: true }),
+    );
+  });
+
+  it('defaults focus:false for the Orca agent launch (daemon dispatch)', async () => {
+    const store = configure({ ide: 'orca' });
+
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+    });
+
+    expect(startAgentInOrca).toHaveBeenCalledWith(
+      expect.objectContaining({ focus: false }),
+    );
+  });
+
+  it('forwards focus:true to the Orca open path on a plain create', async () => {
+    const { createWorktree } = await import('./create.js');
+    const store = configure({ ide: 'orca' });
+
+    await createWorktree('feature', {
+      repoRoot: repoDir,
+      store,
+      focus: true,
+    });
+
+    expect(openWorktreeInOrca).toHaveBeenCalledWith(
+      expect.objectContaining({ focus: true }),
+    );
   });
 });

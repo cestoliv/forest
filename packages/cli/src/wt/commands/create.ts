@@ -20,6 +20,7 @@ import {
   setUpstreamTracking,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
+import { openWorktreeInOrca } from '../lib/orca.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
 import { buildTemplateVars, expandTemplate } from '../lib/template.js';
@@ -42,6 +43,17 @@ export interface CreateOptions {
     opts: { allowAgent: boolean },
   ) => Promise<ExistingWorktreeAction>;
   mode?: string;
+  /**
+   * IDE to open the worktree in (e.g. `zed`, `orca`); overrides the configured
+   * `ide`. Precedence: this flag → `config.ide` → the built-in default `zed`.
+   */
+  ide?: string;
+  /**
+   * Reveal/focus the opened target (currently only Orca's `terminal create
+   * --focus`). Set for interactive CLI runs; left false for the daemon so a
+   * batch of dispatches doesn't keep stealing focus.
+   */
+  focus?: boolean;
   /** Sink for human-readable progress/error lines. Defaults to console. */
   report?: (msg: string) => void;
 }
@@ -239,13 +251,35 @@ export async function promptExistingWorktree(
  * Open the worktree in the configured IDE (if any) and report it. This is the
  * tail of the create flow; `wt agent` reuses it both for Zed and as the
  * non-AI fallback, so the open-and-report behaviour lives in one place.
+ *
+ * `orca` is not a plain `spawn`-and-open editor: it opens the worktree by
+ * registering the repo (`orca repo add`) and attaching a terminal to it via the
+ * Orca CLI, which needs the repo root — so `repoRoot` is required for that path.
  */
 export async function openConfiguredIde(
   config: RepoConfig,
   worktreePath: string,
   report: (msg: string) => void = (m) => console.log(m),
+  repoRoot?: string,
+  focus = false,
 ): Promise<boolean> {
   if (!config.ide) return false;
+  if (config.ide === 'orca') {
+    if (!repoRoot) {
+      report(pc.red('✗ Cannot open Orca without the repo root.'));
+      return false;
+    }
+    const opened = await openWorktreeInOrca({
+      repoRoot,
+      worktreePath,
+      focus,
+      report,
+    });
+    if (opened) {
+      report(pc.green('✓ Opened orca'));
+    }
+    return opened;
+  }
   const opened = await openIde(config.ide, config.ide_open_args, worktreePath);
   if (opened) {
     report(pc.green(`✓ Opened ${config.ide}`));
@@ -261,7 +295,13 @@ export async function createWorktree(
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return;
 
-  const { status, config, worktreePath } = prepared;
+  const { status, worktreePath, repoRoot } = prepared;
+  // Resolve the IDE: --ide flag → configured ide → default. Overriding it on a
+  // copy keeps the rest of the flow (and openConfiguredIde) reading config.ide.
+  const config = {
+    ...prepared.config,
+    ide: options.ide ?? prepared.config.ide,
+  };
 
   if (status === 'exists') {
     const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
@@ -271,5 +311,11 @@ export async function createWorktree(
     if (action !== 'open') return;
   }
 
-  await openConfiguredIde(config, worktreePath, report);
+  await openConfiguredIde(
+    config,
+    worktreePath,
+    report,
+    repoRoot,
+    options.focus ?? false,
+  );
 }

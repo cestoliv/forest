@@ -43,6 +43,29 @@ describe('loadConfig', () => {
     expect(cfg.rules[0].path).toBe(path.join(os.homedir(), 'dev/repo'));
   });
 
+  it('threads a per-route ide through, and leaves it undefined when unset', () => {
+    const store = tmpStore();
+    store.store = {
+      ...valid,
+      rules: [
+        { project: 'p1', path: '~/dev/a', ide: 'orca' },
+        { project: 'p2', path: '~/dev/b' },
+      ],
+    };
+    const cfg = loadConfig(store);
+    expect(cfg.rules[0].ide).toBe('orca');
+    expect(cfg.rules[1].ide).toBeUndefined();
+  });
+
+  it('drops a blank ide so it falls back to the wt default', () => {
+    const store = tmpStore();
+    store.store = {
+      ...valid,
+      rules: [{ project: 'p1', path: '~/dev/a', ide: '  ' }],
+    };
+    expect(loadConfig(store).rules[0].ide).toBeUndefined();
+  });
+
   it('prefers TODOIST_API_TOKEN env over config token', () => {
     const store = tmpStore();
     store.store = valid;

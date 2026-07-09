@@ -15,29 +15,50 @@ program
   .command('create [branch]')
   .description('Create a new worktree')
   .option('--repo <path>', 'Target repository path; skips the repo picker')
-  .action(async (branch: string | undefined, options: { repo?: string }) => {
-    const { createWorktree } = await import('./commands/create.js');
-    await createWorktree(branch, { repoRoot: options.repo });
-  });
+  .option(
+    '--ide <ide>',
+    'IDE to open the worktree in (e.g. zed, orca); overrides the configured ide',
+  )
+  .action(
+    async (
+      branch: string | undefined,
+      options: { repo?: string; ide?: string },
+    ) => {
+      const { createWorktree } = await import('./commands/create.js');
+      await createWorktree(branch, {
+        repoRoot: options.repo,
+        ide: options.ide,
+        // Interactive CLI run: reveal the opened worktree (Orca --focus).
+        focus: true,
+      });
+    },
+  );
 
 program
   .command('agent <branch> <plan_prompt>')
-  .description('Create a worktree and auto-start an AI agent in Zed (macOS)')
+  .description('Create a worktree and auto-start an AI agent in Zed or Orca')
   .option(
     '--mode <mode>',
     'Claude Code permission mode (default, plan, auto, etc.); overrides the configured agent_mode',
   )
   .option('--repo <path>', 'Target repository path; skips the repo picker')
+  .option(
+    '--ide <ide>',
+    'IDE to start the agent in (e.g. zed, orca); overrides the configured ide',
+  )
   .action(
     async (
       branch: string,
       planPrompt: string,
-      options: { mode?: string; repo?: string },
+      options: { mode?: string; repo?: string; ide?: string },
     ) => {
       const { createAgentWorktree } = await import('./commands/agent.js');
       await createAgentWorktree(branch, planPrompt, {
         mode: options.mode,
         repoRoot: options.repo,
+        ide: options.ide,
+        // Interactive CLI run: reveal the agent's terminal (Orca --focus).
+        focus: true,
       });
     },
   );

@@ -78,11 +78,36 @@ describe('dispatchTask', () => {
       'agent/mobile-crash-m1',
       "Let's tackle this task https://app.todoist.com/app/task/m1",
       '/repos/mobile',
+      // No per-route ide on this rule -> undefined (wt falls back to its default).
+      undefined,
     );
     expect(d.api.updated).toEqual([
       { id: 'm1', labels: ['📱 Overload Mobile', 'Agent Working'] },
     ]);
     expect(d.api.comments).toEqual([]);
+  });
+
+  it("forwards the matched rule's ide to spawnAgent", async () => {
+    const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+    const orcaConfig: AgentSpawnerConfig = {
+      ...config,
+      rules: [
+        {
+          project: 'OVL',
+          labels: ['2183895737'],
+          path: '/repos/mobile',
+          ide: 'orca',
+        },
+      ],
+    };
+    const d = deps({ spawnAgent, config: orcaConfig });
+    await dispatchTask(mobileTask, d);
+    expect(spawnAgent).toHaveBeenCalledWith(
+      'agent/mobile-crash-m1',
+      "Let's tackle this task https://app.todoist.com/app/task/m1",
+      '/repos/mobile',
+      'orca',
+    );
   });
 
   it('on no route: adds Error label + comment, keeps Ready', async () => {

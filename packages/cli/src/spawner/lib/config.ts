@@ -6,6 +6,11 @@ export interface RouteRule {
   project: string;
   labels?: string[];
   path: string;
+  /**
+   * IDE to launch the agent in for this route (e.g. `zed`, `orca`). When unset,
+   * the dispatch falls back to `wt`'s configured `ide` default.
+   */
+  ide?: string;
 }
 
 export interface LabelConfig {
@@ -70,7 +75,10 @@ export function loadConfig(
         `Invalid rule at index ${i}: project and path are required.`,
       );
     }
-    return { ...rule, path: expandHome(rule.path) };
+    // Drop a blank `ide` so it falls back to wt's default (a falsy-but-defined
+    // string would otherwise survive wt's `options.ide ?? config.ide`).
+    const ide = rule.ide?.trim() ? rule.ide.trim() : undefined;
+    return { ...rule, path: expandHome(rule.path), ide };
   });
 
   const pollIntervalSeconds =
