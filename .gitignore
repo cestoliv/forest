@@ -4,7 +4,11 @@ dist/
 __pycache__/
 *.pyc
 .DS_Store
-.claude/
+# Ignore .claude/* contents (settings.local.json etc.) but keep the shared docs.
+# Must exclude the contents, not the directory: git does not descend into an
+# excluded directory, so a `!` exception under `.claude/` would never apply.
+.claude/*
+!.claude/docs/
 .superpowers/
 
 # Swift Package Manager (apps/ide-toggler/macos)

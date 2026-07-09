@@ -2,6 +2,7 @@
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import type { RepoConfig } from '../lib/config.js';
+import { buildAgentCommandLine, startAgentInOrca } from '../lib/orca.js';
 import {
   buildTemplateVars,
   expandTemplate,
@@ -90,13 +91,16 @@ export async function createAgentWorktree(
   const prepared = await prepareWorktree(branch, options);
   if (!prepared) return { started: false };
 
-  const {
-    status,
-    config,
-    worktreePath,
-    repoRoot,
-    branch: resolvedBranch,
-  } = prepared;
+  const { status, worktreePath, repoRoot, branch: resolvedBranch } = prepared;
+  // Resolve the IDE: --ide flag → configured ide → default. Overriding it on a
+  // copy keeps startAgentInWorktree/openConfiguredIde reading config.ide.
+  const config: RepoConfig = {
+    ...prepared.config,
+    ide: options.ide ?? prepared.config.ide,
+  };
+  // Focus/reveal the launched target — set by the interactive CLI, off for the
+  // daemon (runAgent) so batch dispatches don't keep stealing focus.
+  const focus = options.focus ?? false;
 
   // Resolve the permission mode: --mode flag → configured agent_mode →
   // 'default'. --mode is already validated above; a misconfigured (invalid or
@@ -118,7 +122,7 @@ export async function createAgentWorktree(
     const action = await prompt(worktreePath, { allowAgent: true });
     if (action === 'quit') return { started: false };
     if (action === 'open') {
-      await openConfiguredIde(config, worktreePath, report);
+      await openConfiguredIde(config, worktreePath, report, repoRoot, focus);
       return { started: false };
     }
   }
@@ -130,6 +134,7 @@ export async function createAgentWorktree(
     resolvedBranch,
     repoRoot,
     report,
+    focus,
   );
   return { started };
 }
@@ -153,23 +158,39 @@ async function startAgentInWorktree(
   branch: string,
   repoRoot: string,
   report: (msg: string) => void,
+  focus: boolean,
 ): Promise<boolean> {
-  // The automation drives Zed specifically; fall back to the plain create
-  // behaviour (open the worktree, no agent) otherwise.
+  // Orca uses its CLI (not the Zed task+keystroke automation): register the
+  // repo and start the agent in a terminal attached to the worktree.
+  if (config.ide === 'orca') {
+    return startAgentInOrcaWorktree(
+      config,
+      worktreePath,
+      planPrompt,
+      mode,
+      branch,
+      repoRoot,
+      report,
+      focus,
+    );
+  }
+
+  // The Zed automation drives Zed specifically; fall back to the plain create
+  // behaviour (open the worktree, no agent) for any other IDE.
   if (config.ide !== 'zed') {
     report(
       pc.yellow(
-        `⚠ Agent auto-start requires Zed (ide is "${config.ide}"). Opening without starting the agent.`,
+        `⚠ Agent auto-start requires Zed or Orca (ide is "${config.ide}"). Opening without starting the agent.`,
       ),
     );
-    await openConfiguredIde(config, worktreePath, report);
+    await openConfiguredIde(config, worktreePath, report, repoRoot, focus);
     return false;
   }
 
   if (!config.agent_command) {
     report(pc.red('No agent_command configured. Set it with `wt config`.'));
     // The worktree is already created; still open it so the user can work in it.
-    await openConfiguredIde(config, worktreePath, report);
+    await openConfiguredIde(config, worktreePath, report, repoRoot, focus);
     return false;
   }
 
@@ -260,6 +281,57 @@ async function startAgentInWorktree(
   await delay(CLEANUP_DELAY_MS);
   cleanupAgentTask(worktreePath, AGENT_TASK_LABEL, created);
   return true;
+}
+
+/**
+ * Orca variant of the agent start: build the same agent command line the Zed
+ * path builds (shared `buildAgentCommandLine`), then hand it to the Orca CLI via
+ * `startAgentInOrca` (register repo + create a terminal in the worktree running
+ * the command). Returns true only when the terminal actually launched. Falls
+ * back to just opening the worktree in Orca when `agent_command` is unset.
+ */
+async function startAgentInOrcaWorktree(
+  config: RepoConfig,
+  worktreePath: string,
+  planPrompt: string,
+  mode: string,
+  branch: string,
+  repoRoot: string,
+  report: (msg: string) => void,
+  focus: boolean,
+): Promise<boolean> {
+  if (!config.agent_command) {
+    report(pc.red('No agent_command configured. Set it with `wt config`.'));
+    // The worktree is already created; still open it so the user can work in it.
+    await openConfiguredIde(config, worktreePath, report, repoRoot, focus);
+    return false;
+  }
+
+  // Same templating/prompt-placement rules as the Zed path (see above): if the
+  // raw command carries `{{prompt}}`, substitute it inline and don't append.
+  const appendPrompt = !hasPromptPlaceholder(config.agent_command);
+  const command = expandTemplate(
+    config.agent_command,
+    buildTemplateVars({ branch, repoRoot, worktreePath, prompt: planPrompt }),
+  );
+  const commandLine = buildAgentCommandLine(
+    command,
+    planPrompt,
+    mode,
+    appendPrompt,
+  );
+
+  report(pc.dim('Starting agent in Orca…'));
+  const started = await startAgentInOrca({
+    repoRoot,
+    worktreePath,
+    commandLine,
+    title: AGENT_TASK_LABEL,
+    focus,
+    report,
+  });
+  if (started) report(pc.green('✓ Agent started'));
+  return started;
 }
 
 function reportTriggerFailure(

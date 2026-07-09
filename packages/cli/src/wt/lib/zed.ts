@@ -17,6 +17,7 @@ import {
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { applyEdits, modify, type ParseError, parse } from 'jsonc-parser';
+import { buildAgentCommandLine } from './orca.js';
 
 /** Label shared by the written task and the keymap binding (must match). */
 export const AGENT_TASK_LABEL = 'wt: agent';
@@ -56,13 +57,12 @@ export interface CreatedArtifacts {
  * without shell-quoting, so a multi-word prompt placed in `args` would be
  * word-split (the agent would receive only the first word).
  *
- * When a mode is provided, injects `--permission-mode <mode>` into the command,
- * removing any existing `--permission-mode` flag from agentCommand to avoid
- * duplicates.
- *
- * When `appendPrompt` is false, the prompt is NOT appended/quoted — the caller
- * has already placed it inside `agentCommand` (e.g. via a `{{prompt}}`
- * template), so appending it again would emit it twice.
+ * The command string is built by the shared `buildAgentCommandLine` (see
+ * `orca.ts`) so the Zed and Orca paths stay byte-for-byte identical: it injects
+ * `--permission-mode <mode>` (removing any existing one to avoid duplicates)
+ * and appends the single-quoted prompt unless `appendPrompt` is false (the
+ * caller already placed it via a `{{prompt}}` template — appending would emit it
+ * twice).
  */
 export function buildAgentTask(
   agentCommand: string,
@@ -71,21 +71,12 @@ export function buildAgentTask(
   mode?: string,
   appendPrompt = true,
 ): ZedTask {
-  let finalCommand = agentCommand;
-
-  // Only modify the command if a mode is explicitly provided
-  if (mode) {
-    // Remove any existing --permission-mode flag to avoid duplicates
-    const baseCommand = agentCommand
-      .replace(/--permission-mode\s+\S+/g, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    finalCommand = `${baseCommand} --permission-mode ${mode}`.trim();
-  }
-
-  const command = appendPrompt
-    ? `${finalCommand} '${prompt.replace(/'/g, "'\\''")}'`
-    : finalCommand;
+  const command = buildAgentCommandLine(
+    agentCommand,
+    prompt,
+    mode,
+    appendPrompt,
+  );
   return {
     label,
     command,

@@ -10,19 +10,34 @@ const rules: RouteRule[] = [
 
 describe('resolveRoute', () => {
   it('matches project + label specific rule', () => {
-    expect(resolveRoute(rules, 'OVL', ['mobile'])).toBe('/repos/mobile');
-    expect(resolveRoute(rules, 'OVL', ['backend'])).toBe('/repos/backend');
+    expect(resolveRoute(rules, 'OVL', ['mobile'])?.path).toBe('/repos/mobile');
+    expect(resolveRoute(rules, 'OVL', ['backend'])?.path).toBe(
+      '/repos/backend',
+    );
   });
 
   it('honours rule order (first match wins)', () => {
-    expect(resolveRoute(rules, 'OVL', ['mobile', 'backend'])).toBe(
+    expect(resolveRoute(rules, 'OVL', ['mobile', 'backend'])?.path).toBe(
       '/repos/mobile',
     );
   });
 
   it('matches a catch-all rule with no labels', () => {
-    expect(resolveRoute(rules, 'WEB', [])).toBe('/repos/website');
-    expect(resolveRoute(rules, 'WEB', ['anything'])).toBe('/repos/website');
+    expect(resolveRoute(rules, 'WEB', [])?.path).toBe('/repos/website');
+    expect(resolveRoute(rules, 'WEB', ['anything'])?.path).toBe(
+      '/repos/website',
+    );
+  });
+
+  it('returns the whole rule so callers can read per-route fields (ide)', () => {
+    const withIde: RouteRule[] = [
+      { project: 'P', path: '/repos/p', ide: 'orca' },
+    ];
+    expect(resolveRoute(withIde, 'P', [])).toEqual({
+      project: 'P',
+      path: '/repos/p',
+      ide: 'orca',
+    });
   });
 
   it('returns null when no rule matches the project', () => {
@@ -38,6 +53,6 @@ describe('resolveRoute', () => {
       { project: 'P', labels: ['a', 'b'], path: '/p' },
     ];
     expect(resolveRoute(multi, 'P', ['a'])).toBeNull();
-    expect(resolveRoute(multi, 'P', ['a', 'b'])).toBe('/p');
+    expect(resolveRoute(multi, 'P', ['a', 'b'])?.path).toBe('/p');
   });
 });

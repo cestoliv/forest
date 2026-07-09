@@ -27,6 +27,20 @@ describe('runWtAgent (adapter)', () => {
     expect(res).toEqual({ ok: true, output: 'done' });
   });
 
+  it('forwards the per-route ide to runAgent', async () => {
+    const { runWtAgent } = await import('./dispatch.js');
+    runAgentMock.mockResolvedValueOnce({ ok: true, output: 'done' });
+
+    await runWtAgent('br', 'pr', '/repo', 'orca');
+
+    expect(runAgentMock).toHaveBeenCalledWith({
+      repoPath: '/repo',
+      branch: 'br',
+      prompt: 'pr',
+      ide: 'orca',
+    });
+  });
+
   it('resolves to { ok:false } instead of throwing when runAgent rejects', async () => {
     const { runWtAgent } = await import('./dispatch.js');
     runAgentMock.mockRejectedValueOnce(new Error('kaboom'));

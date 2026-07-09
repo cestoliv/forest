@@ -9,6 +9,7 @@ export type SpawnAgent = (
   branch: string,
   prompt: string,
   repoPath: string,
+  ide?: string,
 ) => Promise<{ ok: boolean; output: string }>;
 
 export interface DispatchDeps {
@@ -33,8 +34,8 @@ export async function dispatchTask(
     .map((name) => nameToId.get(name))
     .filter((id): id is string => id !== undefined);
 
-  const path = resolveRoute(config.rules, task.project_id, labelIds);
-  if (!path) {
+  const rule = resolveRoute(config.rules, task.project_id, labelIds);
+  if (!rule) {
     log(`No routing rule for task ${task.id} (project ${task.project_id}).`);
     await api.addComment(
       task.id,
@@ -43,13 +44,16 @@ export async function dispatchTask(
     await api.updateTaskLabels(task.id, addOnce(task.labels, errorName));
     return;
   }
+  const { path, ide } = rule;
 
   const branch = buildBranchName(config.branchPrefix, task.content, task.id);
   const prompt = renderTemplate(config.promptTemplate, task);
-  log(`Dispatching task ${task.id} -> ${path} (branch ${branch}).`);
+  log(
+    `Dispatching task ${task.id} -> ${path}${ide ? ` (ide ${ide})` : ''} (branch ${branch}).`,
+  );
   let result: { ok: boolean; output: string };
   try {
-    result = await spawnAgent(branch, prompt, path);
+    result = await spawnAgent(branch, prompt, path, ide);
   } catch (err) {
     result = {
       ok: false,
@@ -91,9 +95,9 @@ function addOnce(labels: string[], name: string): string[] {
 // Calls wt's agent flow in-process (same package). runAgent already maps
 // failures to { ok:false }, but we still guard against an unexpected throw so a
 // single bad task can never take down the daemon poll loop.
-export const runWtAgent: SpawnAgent = async (branch, prompt, repoPath) => {
+export const runWtAgent: SpawnAgent = async (branch, prompt, repoPath, ide) => {
   try {
-    return await runAgent({ repoPath, branch, prompt });
+    return await runAgent({ repoPath, branch, prompt, ide });
   } catch (err) {
     return {
       ok: false,

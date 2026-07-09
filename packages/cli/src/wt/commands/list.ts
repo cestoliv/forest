@@ -21,6 +21,7 @@ import {
   type Worktree,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
+import { stopOrcaWorktree } from '../lib/orca.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
 import { buildTemplateVars, expandTemplate } from '../lib/template.js';
@@ -140,6 +141,8 @@ export async function runList(
         await createWorktree(state.branch, {
           repoRoot: state.pickedRepo,
           store,
+          // Interactive TUI action: reveal the opened worktree (Orca --focus).
+          focus: true,
         });
       },
 
@@ -191,6 +194,8 @@ export async function runList(
           repoRoot: state.pickedRepo,
           store,
           mode: state.mode,
+          // Interactive TUI action: reveal the agent's terminal (Orca --focus).
+          focus: true,
         });
       },
 
@@ -217,6 +222,21 @@ export async function deleteWorktree(
     message: `Remove worktree ${pc.bold(item.branch)}? This cannot be undone.`,
   });
   if (clack.isCancel(confirmed) || !confirmed) return false;
+
+  // Stop the worktree's Orca agent/terminal first: a live PTY whose cwd sits
+  // inside the worktree can make teardown commands and `git worktree remove`
+  // fail. Best-effort and silent — it never launches Orca and no-ops for
+  // worktrees Orca never saw, so it can never block a delete.
+  //
+  // The ordering relies on `orca terminal stop` being synchronous, which was
+  // verified against the installed Orca CLI: when it returns, the PTY's child
+  // process is already reaped and `orca terminal list` reports 0 terminals, so
+  // `removeWorktree` below never races a dying shell. No post-stop wait needed.
+  try {
+    await stopOrcaWorktree({ worktreePath: item.path });
+  } catch {
+    // unreachable (stopOrcaWorktree swallows), but deletion must never depend on it
+  }
 
   const config = getEffectiveConfig(item.repoRoot, store);
   if (config.teardown_commands.length > 0) {

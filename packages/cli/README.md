@@ -48,17 +48,30 @@ wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
 ```
 
-## `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>]` — the standout
+## `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>] [--ide <ide>]` — the standout
 
 ```bash
 wt agent feat/login "Read the codebase, then propose a plan for login."
 wt agent fix-bug "Fix the auth bug" --mode auto
 wt agent refactor "Refactor API layer" --mode default
+wt agent feat/login "Plan login" --ide orca   # start the agent in Orca instead of Zed
 ```
 
 Creates a worktree exactly like `wt create`, then auto-starts your agent
 (default `claude`, run with `--permission-mode default`) in Zed's integrated
 terminal — pre-filled with your prompt and left interactive for you to take over.
+
+**Zed or Orca.** The launch target is the `ide` config key (default `zed`),
+overridable per invocation with `--ide zed|orca`. With `--ide orca` (or `ide`
+set to `orca`) `wt agent` instead registers the repo with Orca (`orca repo
+add`) and starts the same agent command inside a terminal attached to the
+worktree (`orca terminal create`) — same worktree-creation flow, same command
+string, different host. If Orca's runtime isn't running it launches it (`orca
+open`) and waits a few seconds for it to come up before continuing; only if it
+never becomes ready does it fall back to an actionable error without starting
+the agent. Interactive runs also switch Orca to the new terminal (best-effort,
+via `orca terminal switch`); the `agent-spawner` daemon deliberately doesn't (so
+a batch of dispatches doesn't keep stealing focus).
 
 **Available modes** (`--mode`, defaults to `default`; change the default with
 the `agent_mode` config key):
@@ -77,8 +90,11 @@ temp task so the repo stays clean.
 **Requires** macOS, Zed, and Accessibility permission for the app running `wt`.
 Not granted yet? `wt agent` opens _System Settings → Privacy & Security →
 Accessibility_, waits while you grant it (you may need to quit and reopen the
-app), then retries automatically. On other platforms — or when `ide` isn't
-`zed` — the worktree is still created and opened, just without the agent.
+app), then retries automatically. This Zed automation applies only when `ide`
+is `zed`; with `--ide orca` the agent runs via the Orca CLI instead (no
+keymap/Accessibility needed). On other platforms — or when `ide` is neither
+`zed` nor `orca` — the worktree is still created and opened, just without the
+agent.
 
 If the path already exists, `wt agent` offers to open it — or open it and start
 the agent — instead of erroring (in a non-interactive shell it exits non-zero).
@@ -119,12 +135,13 @@ already been merged or whose PR/MR was closed without merging (see
 The main worktree is tagged `(main)` and is protected — `D` only removes linked
 worktrees, never the main repository.
 
-## Create — `wt create [branch] [--repo <path>]`
+## Create — `wt create [branch] [--repo <path>] [--ide <ide>]`
 
 ```bash
 wt create feat/login              # From base branch (origin/main by default)
 wt create                         # Prompts for a branch name
 wt create feat/login --repo ~/dev/my-project   # Skip the picker, target a repo
+wt create feat/login --ide orca   # Open the new worktree in Orca instead of Zed
 ```
 
 Creates a worktree as a sibling directory (`../my-project-feat-login`), runs your
@@ -134,6 +151,12 @@ discovery but never assumed) — so in a non-interactive shell it exits non-zero
 because the picker needs a TTY. Pass `--repo <path>` to name the target repo
 explicitly and skip the picker (the path is validated as a git repo; a bad path
 errors). `wt agent` accepts the same `--repo <path>` flag.
+
+Pass `--ide <ide>` to override the configured `ide` for this run (precedence:
+`--ide` → `config.ide` → the default `zed`). `--ide orca` opens the worktree in
+Orca — it registers the repo (`orca repo add`) and opens a terminal on the
+worktree (`orca terminal create`) rather than spawning an editor. `wt agent`
+accepts the same `--ide <ide>` flag.
 
 If the path already exists, `wt create` offers to open it in your IDE instead of
 erroring (in a non-interactive shell it exits non-zero).
@@ -152,6 +175,14 @@ branch individually**,
 and force-confirming when git refuses (submodules or uncommitted changes), just
 like a manual `D` delete. The branch itself stays; only the worktree is removed.
 Your `teardown_commands` run before each removal.
+
+Removing a worktree — via `wt prune` or the TUI `D` key — also **best-effort
+stops that worktree's Orca agent and terminal** (`orca terminal stop --worktree
+path:<worktree>`) before the teardown commands and the `git worktree remove`, so
+a live agent shell can't keep the directory busy. It only ever *probes* Orca
+(`orca status`): it never launches Orca, and it's a silent no-op when Orca isn't
+running, isn't installed, or never knew about that worktree (any non-Orca
+worktree). Nothing it does can fail or block a deletion.
 
 Merge detection is tiered. Patch-id matches (via `git cherry`) catch a
 single-commit branch **squash-merged** through a PR, offline. For the ambiguous
@@ -181,7 +212,7 @@ Edit with `wt config` (`wt config --path` prints the file location —
 
 | Key                   | Default                           | Description                                                                         |
 | --------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
-| `ide`                 | `"zed"`                           | Editor to open worktrees with                                                       |
+| `ide`                 | `"zed"`                           | Where to open worktrees / start the agent — `zed` (editor + task automation) or `orca` (via the Orca CLI). Override per run with `--ide` |
 | `ide_open_args`       | `["-n"]`                          | Extra args passed to the IDE command                                                |
 | `base_branch`         | `"origin/main"`                   | Branch new worktrees are created from                                               |
 | `worktree_path`       | `"../"`                           | Where worktrees are placed (relative to repo)                                       |
@@ -267,10 +298,12 @@ Config essentials (`agent-spawner config --path` for the file location;
 - **`token`** — a Todoist API token (or set `TODOIST_API_TOKEN`)
 - **`labels`** — the `ready` / `working` / `error` Todoist label ids the
   daemon reads and swaps
-- **`rules`** — ordered routing rules, each `{ project, labels?, path }`:
+- **`rules`** — ordered routing rules, each `{ project, labels?, path, ide? }`:
   the first rule whose Todoist project id matches (and whose `labels`, if
   given, are all present on the task) wins, and `path` is the absolute (or
-  `~`-expandable) local repo root to dispatch into
+  `~`-expandable) local repo root to dispatch into. Optional `ide` (`zed` or
+  `orca`) picks the launch target for that route; when omitted it falls back to
+  `wt`'s configured `ide` default
 - **`pollIntervalSeconds`** (default `600`) and **`promptTemplate`** (built
   with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, `{{projectId}}`
   placeholders) round out the poll loop and the prompt sent to `wt agent`

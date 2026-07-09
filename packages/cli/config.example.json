@@ -19,6 +19,10 @@
       "labels": ["2183895740"],
       "path": "~/dev/overload-backend"
     },
-    { "project": "6gc2v7V4rwXGjxh8", "path": "~/dev/overload-website" }
+    {
+      "project": "6gc2v7V4rwXGjxh8",
+      "path": "~/dev/overload-website",
+      "ide": "orca"
+    }
   ]
 }
