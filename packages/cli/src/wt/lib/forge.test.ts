@@ -71,12 +71,14 @@ describe('selectForgeTool', () => {
 });
 
 describe('buildMergedQuery', () => {
-  it('builds a gh query filtered to merged PRs for the head branch', () => {
-    expect(buildMergedQuery('gh', 'feat/x')).toEqual([
+  it('builds a gh query filtered to merged PRs for the head and base branches', () => {
+    expect(buildMergedQuery('gh', 'feat/x', 'main')).toEqual([
       'pr',
       'list',
       '--head',
       'feat/x',
+      '--base',
+      'main',
       '--state',
       'merged',
       '--json',
@@ -84,13 +86,15 @@ describe('buildMergedQuery', () => {
     ]);
   });
 
-  it('builds a glab query filtered to merged MRs for the source branch', () => {
-    expect(buildMergedQuery('glab', 'feat/x')).toEqual([
+  it('builds a glab query filtered to merged MRs for the source and target branches', () => {
+    expect(buildMergedQuery('glab', 'feat/x', 'main')).toEqual([
       'mr',
       'list',
       '--merged',
       '--source-branch',
       'feat/x',
+      '--target-branch',
+      'main',
       '-F',
       'json',
     ]);
@@ -98,12 +102,14 @@ describe('buildMergedQuery', () => {
 });
 
 describe('buildClosedQuery', () => {
-  it('builds a gh query filtered to closed PRs for the head branch', () => {
-    expect(buildClosedQuery('gh', 'feat/x')).toEqual([
+  it('builds a gh query filtered to closed PRs for the head and base branches', () => {
+    expect(buildClosedQuery('gh', 'feat/x', 'main')).toEqual([
       'pr',
       'list',
       '--head',
       'feat/x',
+      '--base',
+      'main',
       '--state',
       'closed',
       '--json',
@@ -111,13 +117,15 @@ describe('buildClosedQuery', () => {
     ]);
   });
 
-  it('builds a glab query filtered to closed MRs for the source branch', () => {
-    expect(buildClosedQuery('glab', 'feat/x')).toEqual([
+  it('builds a glab query filtered to closed MRs for the source and target branches', () => {
+    expect(buildClosedQuery('glab', 'feat/x', 'main')).toEqual([
       'mr',
       'list',
       '--closed',
       '--source-branch',
       'feat/x',
+      '--target-branch',
+      'main',
       '-F',
       'json',
     ]);
@@ -187,6 +195,7 @@ describe('hasMergedPullRequest', () => {
       hasMergedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('git@git.chevro.fr:o/r.git', '[{"iid":15}]'),
       ),
@@ -198,6 +207,7 @@ describe('hasMergedPullRequest', () => {
       hasMergedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('git@github.com:o/r.git', '[]'),
       ),
@@ -213,8 +223,25 @@ describe('hasMergedPullRequest', () => {
         return '[{"number":1}]';
       },
     };
-    expect(hasMergedPullRequest('/repo', 'feat/x', 'origin', spy)).toBe(true);
+    expect(hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', spy)).toBe(
+      true,
+    );
     expect(tool).toBe('gh');
+  });
+
+  it('filters the query by the base branch as the PR target', () => {
+    // The caller does no ancestry check, so without this filter a branch merged
+    // into `develop` would be reported as merged into `main`.
+    let args: string[] | undefined;
+    const spy: ForgeRunner = {
+      remoteUrl: () => 'git@github.com:o/r.git',
+      query: (_repo, _tool, a) => {
+        args = a;
+        return '[{"number":1}]';
+      },
+    };
+    hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', spy);
+    expect(args?.join(' ')).toContain('--base main');
   });
 
   it('fails closed (false) when resolving the remote throws', () => {
@@ -224,9 +251,9 @@ describe('hasMergedPullRequest', () => {
       },
       query: () => '[{"number":1}]',
     };
-    expect(hasMergedPullRequest('/repo', 'feat/x', 'origin', throwing)).toBe(
-      false,
-    );
+    expect(
+      hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
+    ).toBe(false);
   });
 
   it('fails closed (false) when the query (CLI) throws or times out', () => {
@@ -236,9 +263,9 @@ describe('hasMergedPullRequest', () => {
         throw new Error('gh: command not found');
       },
     };
-    expect(hasMergedPullRequest('/repo', 'feat/x', 'origin', throwing)).toBe(
-      false,
-    );
+    expect(
+      hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
+    ).toBe(false);
   });
 
   it('fails closed (false) when the host is unparseable', () => {
@@ -246,6 +273,7 @@ describe('hasMergedPullRequest', () => {
       hasMergedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('garbage', '[]'),
       ),
@@ -264,6 +292,7 @@ describe('hasClosedPullRequest', () => {
       hasClosedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('git@git.chevro.fr:o/r.git', '[{"state":"closed"}]'),
       ),
@@ -275,6 +304,7 @@ describe('hasClosedPullRequest', () => {
       hasClosedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('git@github.com:o/r.git', '[{"state":"MERGED"}]'),
       ),
@@ -286,6 +316,7 @@ describe('hasClosedPullRequest', () => {
       hasClosedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('git@github.com:o/r.git', '[]'),
       ),
@@ -301,8 +332,23 @@ describe('hasClosedPullRequest', () => {
         return '[{"state":"CLOSED"}]';
       },
     };
-    expect(hasClosedPullRequest('/repo', 'feat/x', 'origin', spy)).toBe(true);
+    expect(hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', spy)).toBe(
+      true,
+    );
     expect(tool).toBe('gh');
+  });
+
+  it('filters the query by the base branch as the PR target', () => {
+    let args: string[] | undefined;
+    const spy: ForgeRunner = {
+      remoteUrl: () => 'git@github.com:o/r.git',
+      query: (_repo, _tool, a) => {
+        args = a;
+        return '[{"state":"CLOSED"}]';
+      },
+    };
+    hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', spy);
+    expect(args?.join(' ')).toContain('--base main');
   });
 
   it('fails closed (false) when resolving the remote throws', () => {
@@ -312,9 +358,9 @@ describe('hasClosedPullRequest', () => {
       },
       query: () => '[{"state":"CLOSED"}]',
     };
-    expect(hasClosedPullRequest('/repo', 'feat/x', 'origin', throwing)).toBe(
-      false,
-    );
+    expect(
+      hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
+    ).toBe(false);
   });
 
   it('fails closed (false) when the query (CLI) throws or times out', () => {
@@ -324,9 +370,9 @@ describe('hasClosedPullRequest', () => {
         throw new Error('gh: command not found');
       },
     };
-    expect(hasClosedPullRequest('/repo', 'feat/x', 'origin', throwing)).toBe(
-      false,
-    );
+    expect(
+      hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
+    ).toBe(false);
   });
 
   it('fails closed (false) when the host is unparseable', () => {
@@ -334,6 +380,7 @@ describe('hasClosedPullRequest', () => {
       hasClosedPullRequest(
         '/repo',
         'feat/x',
+        'main',
         'origin',
         runner('garbage', '[{"state":"CLOSED"}]'),
       ),

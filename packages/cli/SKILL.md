@@ -145,24 +145,35 @@ never fail a deletion.
 wt prune   # review and remove merged worktrees, one prompt per branch
 ```
 
-Merge detection works in tiers. A branch whose diff already exists in base by
-patch id (via `git cherry`, so a single-commit branch **squash-merged** through a
-PR is recognized offline) is merged. For the ambiguous case — the branch tip is
-an ancestor of base but 0 commits ahead, which a **fast-forward / merge-commit**
-merge and a worktree holding only *uncommitted* work both produce — it consults
-the **forge**: a merged PR/MR (via `gh` for GitHub, `glab` for GitLab incl.
-self-hosted, auto-detected from the remote) is the only reliable signal. If the
-forge can't answer (CLI missing, offline, branch unpushed, no merged PR/MR) the
-branch is left alone. A worktree still sitting exactly on the base commit is
-never offered. Separately, a branch is pruned when its PR/MR was **closed
-without merging** — a forge-only signal that does no git ancestry checks (so it
-can prune a branch that is *ahead* of base), gated only by the same
-pushed-branch guard and failing closed on any error. `wt prune` also best-effort
-fetches the remote first so detection
-sees up-to-date refs; if the
-base ref can't be resolved (e.g. offline), nothing is removed. Always runs across
-all registered repos (each against its own `base_branch`). The TUI exposes the
-same action under the `p` key.
+Detection uses four signals; any one is enough, and the two offline ones run
+first so the network is often not touched at all.
+
+1. **Patch id** (`git cherry`, offline): every commit on the branch already has
+   a patch-equivalent in base — a single-commit branch **squash-merged** through
+   a PR, or a rebase-merge.
+2. **No unique commits** (offline): the branch adds nothing base doesn't have —
+   a **fast-forward / merge-commit** merge, or a branch sitting on base's tip.
+   Git cannot tell that apart from a fresh worktree holding only *uncommitted*
+   work, so this only counts when the worktree is **clean** and the branch was
+   **pushed**. (Consequence: a never-pushed worktree is never pruned on this
+   path, even if abandoned.)
+3. **Merged PR/MR on the forge** (via `gh` for GitHub, `glab` for GitLab incl.
+   self-hosted, auto-detected from the remote). Required when the forge rebased
+   the squash onto a newer base: the patch id then matches nothing and the
+   branch is still *ahead* of base, so neither offline signal fires.
+4. **Closed-unmerged PR/MR** on the forge — the branch is dead (the fix landed
+   another way). Like (3) it does no git ancestry checks, so it too can prune a
+   branch ahead of base.
+
+(3) and (4) only count a PR/MR whose target branch is the configured
+`base_branch`, so a branch merged into `develop` is not prunable against `main`.
+Both are skipped for never-pushed branches, and every signal fails closed
+(CLI missing, offline, unresolvable base ref ⇒ not pruned). `wt prune`
+best-effort fetches the remote first so detection sees up-to-date refs. Because
+the forge is matched by **branch name**, a branch recreated under the name of an
+old merged/closed PR can be flagged — the per-branch confirmation prompt is the
+backstop. Always runs across all registered repos (each against its own
+`base_branch`). The TUI exposes the same action under the `p` key.
 
 ### `wt config`
 

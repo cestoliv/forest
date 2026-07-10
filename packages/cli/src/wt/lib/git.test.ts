@@ -16,8 +16,11 @@ import {
   branchExists,
   fetchRemote,
   getRepoRoot,
+  hasNoUniqueCommits,
   isBranchClosed,
   isBranchMerged,
+  isBranchMergedOnForge,
+  isWorktreeClean,
   listWorktreeDirtyFiles,
   listWorktrees,
   parseWorktreeList,
@@ -25,6 +28,7 @@ import {
   removeWorktree,
   resolveWorktreePath,
   setUpstreamTracking,
+  splitBaseRef,
 } from './git.js';
 
 let tmpDir: string;
@@ -46,6 +50,35 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tmpDir, { recursive: true, force: true });
 });
+
+// git init may default to 'master' or 'main' depending on the host config.
+const base = (): string =>
+  execSync('git branch --show-current', {
+    cwd: repoDir,
+    encoding: 'utf8',
+  }).trim();
+
+// Set up an ambiguous fast-forward / merge-commit branch: its commit lands
+// verbatim in base, so the tip becomes a strict ancestor of base and
+// `git cherry` emits nothing. Git alone cannot decide — only the forge can.
+// `pushed` simulates the branch having been pushed (a remote-tracking ref),
+// which gates the forge lookup.
+const setupMergedFf = (pushed = true): string => {
+  const b = base();
+  execSync('git checkout -b merged-ff', { cwd: repoDir });
+  writeFileSync(path.join(repoDir, 'ff.txt'), 'ff content');
+  execSync('git add . && git commit -m "ff work"', { cwd: repoDir });
+  if (pushed) {
+    execSync('git update-ref refs/remotes/origin/merged-ff merged-ff', {
+      cwd: repoDir,
+    });
+  }
+  execSync(`git checkout ${b}`, { cwd: repoDir });
+  execSync('git merge --no-ff -m "merge merged-ff" merged-ff', {
+    cwd: repoDir,
+  });
+  return b;
+};
 
 describe('getRepoRoot', () => {
   it('returns repo root when inside a repo', () => {
@@ -375,13 +408,6 @@ describe('setUpstreamTracking', () => {
 });
 
 describe('isBranchMerged', () => {
-  // git init may default to 'master' or 'main' depending on the host config.
-  const base = (): string =>
-    execSync('git branch --show-current', {
-      cwd: repoDir,
-      encoding: 'utf8',
-    }).trim();
-
   it('returns true for a single-commit branch that was squash-merged', () => {
     const b = base();
     execSync('git checkout -b squashed', { cwd: repoDir });
@@ -417,69 +443,11 @@ describe('isBranchMerged', () => {
     expect(isBranchMerged(repoDir, 'rebased', b)).toBe(true);
   });
 
-  // Set up an ambiguous fast-forward / merge-commit branch: its commit lands
-  // verbatim in base, so the tip becomes a strict ancestor of base and
-  // `git cherry` emits nothing. Git alone cannot decide — only the forge can.
-  // `pushed` simulates the branch having been pushed (a remote-tracking ref),
-  // which gates the forge lookup.
-  const setupMergedFf = (pushed = true): string => {
-    const b = base();
-    execSync('git checkout -b merged-ff', { cwd: repoDir });
-    writeFileSync(path.join(repoDir, 'ff.txt'), 'ff content');
-    execSync('git add . && git commit -m "ff work"', { cwd: repoDir });
-    if (pushed) {
-      execSync('git update-ref refs/remotes/origin/merged-ff merged-ff', {
-        cwd: repoDir,
-      });
-    }
-    execSync(`git checkout ${b}`, { cwd: repoDir });
-    execSync('git merge --no-ff -m "merge merged-ff" merged-ff', {
-      cwd: repoDir,
-    });
-    return b;
-  };
-
-  it('consults the forge for a pushed ancestor branch and returns true when it has a merged PR/MR', () => {
+  it('returns false for a branch merged by a merge commit (no patch-id match)', () => {
+    // Its commit lands verbatim in base, so `git cherry` emits nothing. Pure
+    // topology cannot call this merged — `hasNoUniqueCommits` covers it.
     const b = setupMergedFf();
-    const forge = () => true;
-    expect(isBranchMerged(repoDir, 'merged-ff', b, forge)).toBe(true);
-  });
-
-  it('consults the forge for a pushed ancestor branch and returns false when it has no merged PR/MR', () => {
-    const b = setupMergedFf();
-    // The WIP-on-stale-base case looks identical to git; the forge says "no".
-    const forge = () => false;
-    expect(isBranchMerged(repoDir, 'merged-ff', b, forge)).toBe(false);
-  });
-
-  it('does not consult the forge for an ancestor branch that was never pushed', () => {
-    const b = setupMergedFf(false);
-    let called = false;
-    const forge = () => {
-      called = true;
-      return true;
-    };
-    // No remote-tracking ref → it cannot have a merged PR/MR → skip the lookup.
-    expect(isBranchMerged(repoDir, 'merged-ff', b, forge)).toBe(false);
-    expect(called).toBe(false);
-  });
-
-  it('does not consult the forge when git already proves the merge (squash)', () => {
-    const b = base();
-    execSync('git checkout -b squashed2', { cwd: repoDir });
-    writeFileSync(path.join(repoDir, 's2.txt'), 'squash2');
-    execSync('git add . && git commit -m "squash2 work"', { cwd: repoDir });
-    execSync(`git checkout ${b}`, { cwd: repoDir });
-    execSync('git merge --squash squashed2', { cwd: repoDir });
-    execSync('git commit -m "squash2 (squashed)"', { cwd: repoDir });
-
-    let called = false;
-    const forge = () => {
-      called = true;
-      return false;
-    };
-    expect(isBranchMerged(repoDir, 'squashed2', b, forge)).toBe(true);
-    expect(called).toBe(false);
+    expect(isBranchMerged(repoDir, 'merged-ff', b)).toBe(false);
   });
 
   it('returns false for a brand-new branch with no commits of its own', () => {
@@ -507,13 +475,175 @@ describe('isBranchMerged', () => {
   });
 });
 
-describe('isBranchClosed', () => {
-  const base = (): string =>
-    execSync('git branch --show-current', {
-      cwd: repoDir,
-      encoding: 'utf8',
-    }).trim();
+describe('splitBaseRef', () => {
+  it('splits a <remote>/<branch> ref', () => {
+    expect(splitBaseRef('origin/main')).toEqual({
+      remote: 'origin',
+      branch: 'main',
+    });
+  });
 
+  it('strips only the leading remote from a nested branch name', () => {
+    expect(splitBaseRef('origin/feature/nested')).toEqual({
+      remote: 'origin',
+      branch: 'feature/nested',
+    });
+  });
+
+  it('defaults a slashless value to the origin remote', () => {
+    expect(splitBaseRef('main')).toEqual({ remote: 'origin', branch: 'main' });
+  });
+});
+
+describe('hasNoUniqueCommits', () => {
+  it('returns true when the branch tip equals the base tip', () => {
+    const b = base();
+    execSync('git branch fresh', { cwd: repoDir });
+    expect(hasNoUniqueCommits(repoDir, 'fresh', b)).toBe(true);
+  });
+
+  it('returns true for a branch merged with a merge commit', () => {
+    const b = setupMergedFf(false);
+    expect(hasNoUniqueCommits(repoDir, 'merged-ff', b)).toBe(true);
+  });
+
+  it('returns false for a branch with a commit not on base', () => {
+    const b = base();
+    execSync('git checkout -b ahead', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'a.txt'), 'ahead');
+    execSync('git add . && git commit -m "ahead work"', { cwd: repoDir });
+    expect(hasNoUniqueCommits(repoDir, 'ahead', b)).toBe(false);
+  });
+
+  it('returns true for a branch left behind as base advances', () => {
+    // A fresh worktree branch whose base has since moved on is indistinguishable
+    // from a fast-forward-merged one at the branch level. Reporting true here is
+    // only safe because `buildPrunePredicate` ANDs this with `isWorktreeClean`
+    // and `hasRemoteTrackingRef` — an in-progress or never-pushed worktree is
+    // still never pruned on this path.
+    const b = base();
+    execSync('git branch stale', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'base.txt'), 'base moved on');
+    execSync('git add . && git commit -m "base advances"', { cwd: repoDir });
+
+    expect(hasNoUniqueCommits(repoDir, 'stale', b)).toBe(true);
+  });
+
+  it('fails closed (false) when the base ref does not exist', () => {
+    expect(hasNoUniqueCommits(repoDir, base(), 'origin/does-not-exist')).toBe(
+      false,
+    );
+  });
+});
+
+describe('isWorktreeClean', () => {
+  it('returns true for a clean worktree', () => {
+    expect(isWorktreeClean(repoDir)).toBe(true);
+  });
+
+  it('returns false when a tracked file is modified', () => {
+    writeFileSync(path.join(repoDir, 'README.md'), 'changed');
+    expect(isWorktreeClean(repoDir)).toBe(false);
+  });
+
+  it('returns false when only untracked files are present', () => {
+    // Untracked work is still the user's work — never prune over it.
+    writeFileSync(path.join(repoDir, 'new.txt'), 'new');
+    expect(isWorktreeClean(repoDir)).toBe(false);
+  });
+
+  it('fails closed (false) on a non-existent path', () => {
+    // Contrast with `listWorktreeDirtyFiles`, which reads a bad path as "clean".
+    expect(isWorktreeClean('/nonexistent/path')).toBe(false);
+  });
+});
+
+describe('isBranchMergedOnForge', () => {
+  // A squash-merge that the forge rebased onto a newer base: the squash commit's
+  // patch id differs from the branch commit's, and the branch is still 1 commit
+  // *ahead* of base. Git can see neither the patch equivalence nor an ancestry
+  // relation — the forge is the only witness. `pushed` gates the forge lookup.
+  const setupRebasedSquash = (pushed = true): string => {
+    const b = base();
+    execSync('git checkout -b offline', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'offline.txt'), 'offline work');
+    execSync('git add . && git commit -m "offline work"', { cwd: repoDir });
+    if (pushed) {
+      execSync('git update-ref refs/remotes/origin/offline offline', {
+        cwd: repoDir,
+      });
+    }
+    execSync(`git checkout ${b}`, { cwd: repoDir });
+    // Base advances, then the squash lands with a *different* patch than the
+    // branch commit (the rebase re-resolved it against the new base).
+    writeFileSync(path.join(repoDir, 'base.txt'), 'base moved on');
+    execSync('git add . && git commit -m "base advances"', { cwd: repoDir });
+    writeFileSync(path.join(repoDir, 'offline.txt'), 'offline work, rebased');
+    execSync('git add . && git commit -m "offline (#50)"', { cwd: repoDir });
+    return b;
+  };
+
+  it('returns true for a rebased squash-merge that git cannot see', () => {
+    const b = setupRebasedSquash();
+    // Both git-only signals genuinely fail on this branch.
+    expect(isBranchMerged(repoDir, 'offline', b)).toBe(false);
+    expect(hasNoUniqueCommits(repoDir, 'offline', b)).toBe(false);
+
+    expect(isBranchMergedOnForge(repoDir, 'offline', b, () => true)).toBe(true);
+  });
+
+  it('does not consult the forge for a branch that was never pushed', () => {
+    const b = setupRebasedSquash(false);
+    let called = false;
+    const forge = () => {
+      called = true;
+      return true;
+    };
+    // No remote-tracking ref → it cannot have a merged PR/MR → skip the lookup.
+    expect(isBranchMergedOnForge(repoDir, 'offline', b, forge)).toBe(false);
+    expect(called).toBe(false);
+  });
+
+  it('returns false when the forge reports no merged PR/MR', () => {
+    const b = setupRebasedSquash();
+    expect(isBranchMergedOnForge(repoDir, 'offline', b, () => false)).toBe(
+      false,
+    );
+  });
+
+  it('passes the local base branch name and the remote to the forge check', () => {
+    // No ancestry check happens here, so the forge query must be filtered to
+    // PRs/MRs targeting base — which requires the local name, not `origin/main`.
+    setupRebasedSquash();
+    execSync('git update-ref refs/remotes/upstream/offline offline', {
+      cwd: repoDir,
+    });
+    let seen: string[] = [];
+    const forge = (
+      _r: string,
+      _b: string,
+      baseLocal: string,
+      remote: string,
+    ) => {
+      seen = [baseLocal, remote];
+      return true;
+    };
+    expect(
+      isBranchMergedOnForge(repoDir, 'offline', 'upstream/release/1.x', forge),
+    ).toBe(true);
+    expect(seen).toEqual(['release/1.x', 'upstream']);
+  });
+
+  it('fails closed (false) when the forge check throws', () => {
+    const b = setupRebasedSquash();
+    const forge = () => {
+      throw new Error('forge exploded');
+    };
+    expect(isBranchMergedOnForge(repoDir, 'offline', b, forge)).toBe(false);
+  });
+});
+
+describe('isBranchClosed', () => {
   // A pushed branch that is AHEAD of base: it has a commit that never landed on
   // base (its PR was closed without merging, the fix applied elsewhere). Git
   // cannot detect this — `isBranchMerged` returns false — so only the forge
@@ -556,6 +686,27 @@ describe('isBranchClosed', () => {
   it('returns false when the forge reports no closed PR/MR', () => {
     const b = setupClosedAhead();
     expect(isBranchClosed(repoDir, 'closed-ahead', b, () => false)).toBe(false);
+  });
+
+  it('passes the local base branch name and the remote to the forge check', () => {
+    setupClosedAhead();
+    execSync('git update-ref refs/remotes/upstream/closed-ahead closed-ahead', {
+      cwd: repoDir,
+    });
+    let seen: string[] = [];
+    const forge = (
+      _r: string,
+      _b: string,
+      baseLocal: string,
+      remote: string,
+    ) => {
+      seen = [baseLocal, remote];
+      return true;
+    };
+    expect(
+      isBranchClosed(repoDir, 'closed-ahead', 'upstream/release/1.x', forge),
+    ).toBe(true);
+    expect(seen).toEqual(['release/1.x', 'upstream']);
   });
 
   it('fails closed (false) when the forge check throws', () => {
