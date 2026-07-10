@@ -12,12 +12,17 @@ import {
 import {
   fetchRemote,
   getRepoRoot,
+  hasNoUniqueCommits,
+  hasRemoteTrackingRef,
   isBranchClosed,
   isBranchMerged,
+  isBranchMergedOnForge,
+  isWorktreeClean,
   listWorktreeDirtyFiles,
   listWorktrees,
   remoteExists,
   removeWorktree,
+  splitBaseRef,
   type Worktree,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
@@ -327,23 +332,74 @@ export function selectWipeCandidates(
   );
 }
 
+/** The git/forge signals `buildPrunePredicate` consults, injectable for tests. */
+export interface PruneDeps {
+  isBranchMerged: typeof isBranchMerged;
+  hasNoUniqueCommits: typeof hasNoUniqueCommits;
+  isWorktreeClean: typeof isWorktreeClean;
+  hasRemoteTrackingRef: typeof hasRemoteTrackingRef;
+  isBranchMergedOnForge: typeof isBranchMergedOnForge;
+  isBranchClosed: typeof isBranchClosed;
+}
+
 /**
- * Build a per-worktree "is prunable" predicate: the branch was either merged
- * into its repo's base branch, or its PR/MR was closed without merging (dead
- * branch). Each worktree is checked against its own repo's effective
- * `base_branch`, and a worktree sitting on the base branch itself is never a
- * candidate.
+ * Build a per-worktree "is prunable" predicate. A worktree is prunable when any
+ * of these holds, checked in order so the two offline signals short-circuit the
+ * two (network) forge lookups away:
+ *
+ * 1. `isBranchMerged` — git proves it by patch id (squash / rebase merge).
+ *
+ * 2. The branch has no commits base doesn't already have (`hasNoUniqueCommits`:
+ *    fast-forward or merge-commit merge, or a branch sitting on base's tip)
+ *    **and** the worktree is clean **and** the branch was pushed. Git alone
+ *    cannot separate "merged by fast-forward" from "fresh worktree holding only
+ *    uncommitted work" — both have zero unique commits — so the worktree's dirty
+ *    state is the discriminator, and requiring a remote-tracking ref keeps a
+ *    just-created `wt create foo` from being offered for deletion. (The cost:
+ *    an abandoned never-pushed worktree stays unprunable.)
+ *
+ * 3. `isBranchMergedOnForge` — the forge reports a merged PR/MR targeting base.
+ *    Needed when a squash was rebased onto a newer base: its patch id matches
+ *    nothing and the branch stays *ahead* of base, so both git signals above are
+ *    false.
+ *
+ * 4. `isBranchClosed` — a PR/MR targeting base was closed without merging (dead
+ *    branch).
+ *
+ * Every signal is scoped to the worktree's own repo's effective `base_branch`:
+ * the git ones by construction, the forge ones because the PR/MR query filters
+ * on the base as its target branch (a branch merged into `develop` is therefore
+ * not prunable against `main`). A worktree sitting on the base branch itself is
+ * never a candidate.
  */
 export function buildPrunePredicate(
   store: ConfigStore,
+  deps: Partial<PruneDeps> = {},
 ): (wt: Worktree) => boolean {
+  const {
+    isBranchMerged: merged = isBranchMerged,
+    hasNoUniqueCommits: noUnique = hasNoUniqueCommits,
+    isWorktreeClean: clean = isWorktreeClean,
+    hasRemoteTrackingRef: pushed = hasRemoteTrackingRef,
+    isBranchMergedOnForge: mergedOnForge = isBranchMergedOnForge,
+    isBranchClosed: closed = isBranchClosed,
+  } = deps;
+
   return (wt) => {
     const config = getEffectiveConfig(wt.repoRoot, store);
     const base = config.base_branch;
-    const baseLocal = base.split('/', 2).slice(1).join('/') || base;
+    const { remote, branch: baseLocal } = splitBaseRef(base);
     if (wt.branch === base || wt.branch === baseLocal) return false;
-    if (isBranchMerged(wt.repoRoot, wt.branch, base)) return true;
-    if (isBranchClosed(wt.repoRoot, wt.branch, base)) return true;
+
+    if (merged(wt.repoRoot, wt.branch, base)) return true;
+    if (
+      noUnique(wt.repoRoot, wt.branch, base) &&
+      clean(wt.path) &&
+      pushed(wt.repoRoot, remote, wt.branch)
+    )
+      return true;
+    if (mergedOnForge(wt.repoRoot, wt.branch, base)) return true;
+    if (closed(wt.repoRoot, wt.branch, base)) return true;
     return false;
   };
 }

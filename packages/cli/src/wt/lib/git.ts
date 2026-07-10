@@ -172,6 +172,28 @@ export function listWorktreeDirtyFiles(worktreePath: string): string[] {
   }
 }
 
+/**
+ * Whether the worktree has no uncommitted work at all — no modified tracked
+ * files and no untracked ones (`git status --porcelain` prints nothing). An
+ * untracked-only worktree still holds the user's work, so it counts as dirty.
+ *
+ * Unlike `listWorktreeDirtyFiles` (which returns `[]` on error, reading a broken
+ * path as "clean"), this **fails closed**: any error → `false`. It gates a
+ * delete decision, so uncertainty must never mean "safe to remove".
+ */
+export function isWorktreeClean(worktreePath: string): boolean {
+  try {
+    const out = execFileSync('git', ['status', '--porcelain'], {
+      cwd: worktreePath,
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    return out.trim().length === 0;
+  } catch {
+    return false;
+  }
+}
+
 export function branchExists(repoRoot: string, branch: string): boolean {
   try {
     const local = execFileSync('git', ['branch', '--list', branch], {
@@ -212,11 +234,43 @@ function isAncestor(
   }
 }
 
-/** Whether a remote-tracking ref `refs/remotes/<remote>/<branch>` exists — i.e.
- * the branch was pushed (and not pruned locally; `wt`'s fetch never `--prune`s,
- * so this stays true for a branch whose remote was deleted after merge). A
- * purely-local branch that was never pushed cannot have a merged PR/MR. */
-function hasRemoteTrackingRef(
+/**
+ * Split a `base_branch` config value into its remote and local branch names:
+ * `origin/main` → `{ remote: 'origin', branch: 'main' }`, and
+ * `origin/feature/nested` → `{ remote: 'origin', branch: 'feature/nested' }`
+ * (only the leading `<remote>/` is stripped). A value with no slash is taken as
+ * a local branch on `origin`: `main` → `{ remote: 'origin', branch: 'main' }`.
+ *
+ * The local name is what the forge wants as a PR/MR target filter; the remote
+ * name is what `hasRemoteTrackingRef` and the forge CLIs want.
+ */
+export function splitBaseRef(baseBranch: string): {
+  remote: string;
+  branch: string;
+} {
+  const slash = baseBranch.indexOf('/');
+  if (slash === -1) return { remote: 'origin', branch: baseBranch };
+  return {
+    remote: baseBranch.slice(0, slash),
+    branch: baseBranch.slice(slash + 1),
+  };
+}
+
+/**
+ * Whether a remote-tracking ref `refs/remotes/<remote>/<branch>` exists — i.e.
+ * the branch was pushed and the ref is still present locally. A purely-local
+ * branch that was never pushed cannot have a PR/MR, so this gates the forge
+ * lookups.
+ *
+ * Caveat: `fetchRemote` runs a plain `git fetch <remote>`, which **honours the
+ * user's `fetch.prune` / `remote.<name>.prune` gitconfig**. With `fetch.prune =
+ * true` and a forge that auto-deletes the head branch on merge, this ref is gone
+ * by the time prune runs, so every signal gated on it (the clean+pushed offline
+ * path, `isBranchMergedOnForge`, `isBranchClosed`) silently reports `false` and
+ * the merged worktree is not offered. That fails closed — nothing unsafe — but
+ * it does mean prune can under-report for users with pruning fetches.
+ */
+export function hasRemoteTrackingRef(
   repoRoot: string,
   remote: string,
   branch: string,
@@ -234,73 +288,122 @@ function hasRemoteTrackingRef(
 }
 
 /**
- * Whether `branch` has been merged into `baseBranch`. Detected in three tiers,
- * stopping at the first that decides:
+ * The non-empty lines of `git cherry <base> <branch>`: one per commit reachable
+ * from `branch` but not from `base`, prefixed `-` when an equivalent patch
+ * already exists in base and `+` when it does not. An empty array means the
+ * branch adds no commits at all.
  *
- * 1. Squash / rebase-merge — patch id via `git cherry <base> <branch>`: the
- *    branch has ≥1 commit and every one already has a patch-equivalent in base.
- *    This is offline, fast, and has no false positives (a branch with no commits
- *    of its own, e.g. a worktree holding only uncommitted work, produces no
- *    `git cherry` output and is not flagged).
+ * **Throws** on any git error (a bad base ref, an unknown branch). Callers must
+ * catch and fail closed — never let a failure read as an empty (i.e. "nothing
+ * unique") result.
+ */
+function cherryLines(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+): string[] {
+  const out = execFileSync('git', ['cherry', baseBranch, branch], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    stdio: 'pipe',
+  });
+  return out.split('\n').filter((l) => l.trim().length > 0);
+}
+
+/**
+ * Whether git alone can prove `branch` was merged into `baseBranch`, by patch
+ * id: the branch has ≥1 commit of its own and every one already has a
+ * patch-equivalent in base. That covers **squash** and **rebase** merges whose
+ * replayed commits kept the same diff.
  *
- * 2. Ambiguous fast-forward / merge-commit — the branch tip is an ancestor of
- *    base and strictly behind it (tip ≠ base tip), so its commits live verbatim
- *    in base. Git cannot tell this apart from a worktree whose only work is
- *    uncommitted and whose base has since advanced — both are 0 commits ahead.
- *    The merged PR/MR on the forge is the only reliable signal, so `forgeCheck`
- *    (gh/glab) decides — but only for branches that were actually pushed (a
- *    remote-tracking ref exists); a purely-local branch cannot have a merged
- *    PR/MR, so the (network) forge call is skipped. A worktree sitting exactly
- *    on base (tip = base tip) is never even queried — no committed work.
+ * This is offline, fast, and has no false positives: a branch with no commits of
+ * its own (a fresh worktree, a fast-forward merge) produces no `git cherry`
+ * output and is not flagged. It is also, deliberately, the *only* thing this
+ * function knows — a branch merged by fast-forward, by a merge commit, or by a
+ * squash that GitHub rebased onto a newer base (different patch id) is invisible
+ * here. Those cases are decided by `hasNoUniqueCommits` and
+ * `isBranchMergedOnForge` in the prune predicate, which have the extra context
+ * (the worktree's dirty state, the forge) that this branch-level view lacks.
  *
- * 3. Otherwise → not merged.
- *
- * `forgeCheck` is injectable for testing (default: real `gh`/`glab` lookup) and
- * itself fails closed, so an unavailable/offline forge yields "not merged".
- * Fails closed overall: any error (missing base ref, unknown branch) → false,
- * so callers never wipe on uncertainty.
+ * Fails closed: any error (missing base ref, unknown branch) → false, so callers
+ * never wipe on uncertainty.
  */
 export function isBranchMerged(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+): boolean {
+  try {
+    const lines = cherryLines(repoRoot, branch, baseBranch);
+    return lines.length > 0 && lines.every((l) => l.startsWith('-'));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether `branch` carries no commits that base doesn't already have: `git
+ * cherry` emits nothing *and* the tip is an ancestor of base. True for a branch
+ * merged by fast-forward or by a merge commit, for a branch sitting exactly on
+ * base's tip, and for a fresh worktree whose only work is uncommitted — git
+ * cannot tell those apart at the branch level.
+ *
+ * So this is **not** on its own a "merged" signal. Callers must combine it with
+ * context git doesn't have — see `buildPrunePredicate`, which additionally
+ * requires the worktree to be clean (no uncommitted work to lose) and the branch
+ * to have been pushed.
+ *
+ * The `isAncestor` conjunct is redundant in practice — a branch with no unique
+ * commits is necessarily an ancestor of base — and is kept as a cheap,
+ * independent second opinion: it holds the line if `git cherry`'s silence ever
+ * means something other than "nothing of its own". Fails closed (`false`) on any
+ * error, so a bad base ref can never make it true.
+ */
+export function hasNoUniqueCommits(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+): boolean {
+  try {
+    if (cherryLines(repoRoot, branch, baseBranch).length > 0) return false;
+    return isAncestor(repoRoot, branch, baseBranch);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the forge (GitHub/GitLab) reports a **merged** PR/MR for `branch`.
+ *
+ * The forge is the only witness for a merge git cannot see: a squash that the
+ * forge rebased onto a newer base gets a patch id that matches neither the
+ * branch's commits nor an ancestry relation, and the branch stays *ahead* of
+ * base. `isBranchMerged` and `hasNoUniqueCommits` are both false for it.
+ *
+ * Structurally identical to `isBranchClosed`: no git topology checks at all, and
+ * the only git-side guard is the pushed-branch check — a purely-local branch
+ * cannot have a PR/MR, so the (network) forge call is skipped. Because there is
+ * no ancestry check, the PR/MR must be filtered to those *targeting* base, which
+ * is why `baseBranch`'s local name is threaded through to `forgeCheck` — without
+ * it, a branch merged into `develop` would count as merged into `main`.
+ * `forgeCheck` is injectable for testing and itself fails closed; any error →
+ * false.
+ */
+export function isBranchMergedOnForge(
   repoRoot: string,
   branch: string,
   baseBranch: string,
   forgeCheck: (
     repoRoot: string,
     branch: string,
+    baseBranch: string,
     remote: string,
   ) => boolean = hasMergedPullRequest,
 ): boolean {
   try {
-    // Tier 1: `git cherry <upstream=base> <head=branch>`: '+' = commit only on
-    // the branch (unmerged), '-' = a patch-equivalent exists in base. This also
-    // validates the base ref — a bad base makes `git cherry` throw → false.
-    const out = execFileSync('git', ['cherry', baseBranch, branch], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
-    const lines = out.split('\n').filter((l) => l.trim().length > 0);
-    if (lines.length > 0 && lines.every((l) => l.startsWith('-'))) return true;
-
-    // Tier 2: ambiguous fast-forward / merge-commit. Resolve tips lazily — only
-    // needed here, never when tier 1 already decided.
-    const revParse = (ref: string): string =>
-      execFileSync('git', ['rev-parse', ref], {
-        cwd: repoRoot,
-        encoding: 'utf8',
-        stdio: 'pipe',
-      }).trim();
-    if (revParse(branch) === revParse(baseBranch)) return false;
-    if (!isAncestor(repoRoot, branch, baseBranch)) return false;
-
-    // `base_branch` is conventionally `<remote>/<branch>` (e.g. origin/main).
-    const remote = baseBranch.includes('/')
-      ? baseBranch.split('/', 1)[0]
-      : 'origin';
-    // Skip the forge lookup for never-pushed branches — the common stale
-    // fresh-worktree case — since they cannot have a merged PR/MR.
+    const { remote, branch: baseLocal } = splitBaseRef(baseBranch);
     if (!hasRemoteTrackingRef(repoRoot, remote, branch)) return false;
-    return forgeCheck(repoRoot, branch, remote);
+    return forgeCheck(repoRoot, branch, baseLocal, remote);
   } catch {
     return false;
   }
@@ -314,8 +417,10 @@ export function isBranchMerged(
  * `git cherry`, no ancestry, no tip comparison): a closed PR says nothing about
  * whether the branch is an ancestor of base, so this can legitimately prune a
  * branch that is *ahead* of base. The only git-side guard is the same
- * pushed-branch check `isBranchMerged` uses — a purely-local branch that was
- * never pushed cannot have a PR/MR, so the (network) forge call is skipped.
+ * pushed-branch check `isBranchMergedOnForge` uses — a purely-local branch that
+ * was never pushed cannot have a PR/MR, so the (network) forge call is skipped.
+ * As there, `baseBranch`'s local name is threaded through to `forgeCheck` so the
+ * PR/MR is filtered to those targeting base.
  *
  * `forgeCheck` is injectable for testing (default: real `gh`/`glab` lookup) and
  * itself fails closed, so an unavailable/offline forge yields "not closed".
@@ -328,18 +433,16 @@ export function isBranchClosed(
   forgeCheck: (
     repoRoot: string,
     branch: string,
+    baseBranch: string,
     remote: string,
   ) => boolean = hasClosedPullRequest,
 ): boolean {
   try {
-    // `base_branch` is conventionally `<remote>/<branch>` (e.g. origin/main).
-    const remote = baseBranch.includes('/')
-      ? baseBranch.split('/', 1)[0]
-      : 'origin';
+    const { remote, branch: baseLocal } = splitBaseRef(baseBranch);
     // A never-pushed branch (no remote-tracking ref) cannot have a PR/MR, so
     // skip the network call — the common stale fresh-worktree case.
     if (!hasRemoteTrackingRef(repoRoot, remote, branch)) return false;
-    return forgeCheck(repoRoot, branch, remote);
+    return forgeCheck(repoRoot, branch, baseLocal, remote);
   } catch {
     return false;
   }

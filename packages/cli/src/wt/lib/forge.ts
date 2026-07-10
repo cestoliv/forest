@@ -48,21 +48,44 @@ export function selectForgeTool(host: string | null): ForgeTool | null {
   return 'glab';
 }
 
-/** argv for listing *merged* PRs/MRs whose source/head branch is `branch`. */
-export function buildMergedQuery(tool: ForgeTool, branch: string): string[] {
+/**
+ * argv for listing *merged* PRs/MRs whose source/head branch is `branch` **and**
+ * whose target branch is `baseBranch` (a local branch name, e.g. `main`).
+ *
+ * The target filter matters: callers ask "is this branch merged into *my* base?"
+ * and do no git ancestry check, so without `--base`/`--target-branch` a branch
+ * merged into `develop` would be reported as merged into `main`.
+ */
+export function buildMergedQuery(
+  tool: ForgeTool,
+  branch: string,
+  baseBranch: string,
+): string[] {
   if (tool === 'gh') {
     return [
       'pr',
       'list',
       '--head',
       branch,
+      '--base',
+      baseBranch,
       '--state',
       'merged',
       '--json',
       'number',
     ];
   }
-  return ['mr', 'list', '--merged', '--source-branch', branch, '-F', 'json'];
+  return [
+    'mr',
+    'list',
+    '--merged',
+    '--source-branch',
+    branch,
+    '--target-branch',
+    baseBranch,
+    '-F',
+    'json',
+  ];
 }
 
 /**
@@ -80,24 +103,41 @@ export function parseMergedResult(stdout: string): boolean {
 }
 
 /** argv for listing *closed-unmerged* PRs/MRs whose source/head branch is
- * `branch`. Note: `gh pr list --state closed` returns *both* closed-unmerged
- * and merged PRs (gh models merged as a kind of closed), so we request the
- * `state` field and let `parseClosedResult` filter merged ones out. `glab mr
- * list --closed` already excludes merged MRs. */
-export function buildClosedQuery(tool: ForgeTool, branch: string): string[] {
+ * `branch` and whose target branch is `baseBranch` (see `buildMergedQuery` for
+ * why the target filter is required). Note: `gh pr list --state closed` returns
+ * *both* closed-unmerged and merged PRs (gh models merged as a kind of closed),
+ * so we request the `state` field and let `parseClosedResult` filter merged ones
+ * out. `glab mr list --closed` already excludes merged MRs. */
+export function buildClosedQuery(
+  tool: ForgeTool,
+  branch: string,
+  baseBranch: string,
+): string[] {
   if (tool === 'gh') {
     return [
       'pr',
       'list',
       '--head',
       branch,
+      '--base',
+      baseBranch,
       '--state',
       'closed',
       '--json',
       'state',
     ];
   }
-  return ['mr', 'list', '--closed', '--source-branch', branch, '-F', 'json'];
+  return [
+    'mr',
+    'list',
+    '--closed',
+    '--source-branch',
+    branch,
+    '--target-branch',
+    baseBranch,
+    '-F',
+    'json',
+  ];
 }
 
 /**
@@ -144,10 +184,13 @@ const defaultRunner: ForgeRunner = {
 };
 
 /**
- * Whether `branch` has a *merged* pull request / merge request on the forge
- * backing `remote`. Resolves the remote URL → host → CLI, queries it, and
- * returns whether any merged PR/MR exists. Fails closed (`false`) on any error:
- * missing CLI, offline, not authenticated, unparseable remote, or no result.
+ * Whether `branch` has a *merged* pull request / merge request **into
+ * `baseBranch`** on the forge backing `remote`. `baseBranch` is the local branch
+ * name (`main`, not `origin/main`) — it becomes the PR/MR target filter, so a
+ * branch merged into some other base is not reported here. Resolves the remote
+ * URL → host → CLI, queries it, and returns whether any such PR/MR exists. Fails
+ * closed (`false`) on any error: missing CLI, offline, not authenticated,
+ * unparseable remote, or no result.
  *
  * The match is by branch *name*, so in the rare case a branch is merged then
  * deleted and a brand-new branch of the same name is later created, the old
@@ -157,6 +200,7 @@ const defaultRunner: ForgeRunner = {
 export function hasMergedPullRequest(
   repoRoot: string,
   branch: string,
+  baseBranch: string,
   remote = 'origin',
   runner: ForgeRunner = defaultRunner,
 ): boolean {
@@ -166,7 +210,7 @@ export function hasMergedPullRequest(
     );
     if (!tool) return false;
     return parseMergedResult(
-      runner.query(repoRoot, tool, buildMergedQuery(tool, branch)),
+      runner.query(repoRoot, tool, buildMergedQuery(tool, branch, baseBranch)),
     );
   } catch {
     return false;
@@ -174,21 +218,24 @@ export function hasMergedPullRequest(
 }
 
 /**
- * Whether `branch` has a *closed-unmerged* pull request / merge request on the
- * forge backing `remote` — i.e. its PR/MR was closed without merging (the fix
- * landed some other way, so the branch is dead). Byte-for-byte parallel to
- * `hasMergedPullRequest`: resolves the remote URL → host → CLI, queries it, and
- * returns whether any closed-unmerged PR/MR exists. Fails closed (`false`) on
- * any error: missing CLI, offline, not authenticated, unparseable remote, or no
- * result.
+ * Whether `branch` has a *closed-unmerged* pull request / merge request
+ * **targeting `baseBranch`** on the forge backing `remote` — i.e. its PR/MR was
+ * closed without merging (the fix landed some other way, so the branch is dead).
+ * Byte-for-byte parallel to `hasMergedPullRequest`, including the local-name
+ * `baseBranch` target filter: resolves the remote URL → host → CLI, queries it,
+ * and returns whether any closed-unmerged PR/MR exists. Fails closed (`false`)
+ * on any error: missing CLI, offline, not authenticated, unparseable remote, or
+ * no result.
  *
  * Note this is orthogonal to git topology — a closed PR says nothing about
  * whether the branch is an ancestor of base, so callers must not gate this on
- * ancestry checks.
+ * ancestry checks. The target-branch filter is what keeps it scoped to the
+ * caller's base despite that.
  */
 export function hasClosedPullRequest(
   repoRoot: string,
   branch: string,
+  baseBranch: string,
   remote = 'origin',
   runner: ForgeRunner = defaultRunner,
 ): boolean {
@@ -198,7 +245,7 @@ export function hasClosedPullRequest(
     );
     if (!tool) return false;
     return parseClosedResult(
-      runner.query(repoRoot, tool, buildClosedQuery(tool, branch)),
+      runner.query(repoRoot, tool, buildClosedQuery(tool, branch, baseBranch)),
     );
   } catch {
     return false;

@@ -16,7 +16,9 @@ import { removeWorktree, type Worktree } from '../lib/git.js';
 import { stopOrcaWorktree } from '../lib/orca.js';
 import { runCommands } from '../lib/setup.js';
 import {
+  buildPrunePredicate,
   deleteWorktree,
+  type PruneDeps,
   prepareListItems,
   selectWipeCandidates,
   wipeWorktrees,
@@ -301,6 +303,116 @@ describe('deleteWorktree (Orca teardown)', () => {
     expect(stopOrcaWorktree).toHaveBeenCalledWith({
       worktreePath: item.path,
     });
+  });
+});
+
+describe('buildPrunePredicate', () => {
+  const wt = (over: Partial<Worktree> = {}): Worktree => ({
+    path: '/r/wt',
+    branch: 'feature',
+    isCurrent: false,
+    isMain: false,
+    repoRoot: '/r',
+    ...over,
+  });
+
+  /** Stub every signal to a fixed answer, recording which ones were consulted. */
+  const stubDeps = (
+    answers: Partial<Record<keyof PruneDeps, boolean>>,
+  ): { deps: PruneDeps; called: Set<keyof PruneDeps> } => {
+    const called = new Set<keyof PruneDeps>();
+    const stub = (name: keyof PruneDeps) => () => {
+      called.add(name);
+      return answers[name] ?? false;
+    };
+    return {
+      deps: {
+        isBranchMerged: stub('isBranchMerged'),
+        hasNoUniqueCommits: stub('hasNoUniqueCommits'),
+        isWorktreeClean: stub('isWorktreeClean'),
+        hasRemoteTrackingRef: stub('hasRemoteTrackingRef'),
+        isBranchMergedOnForge: stub('isBranchMergedOnForge'),
+        isBranchClosed: stub('isBranchClosed'),
+      },
+      called,
+    };
+  };
+
+  const storeWithBase = () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ base_branch: 'origin/main' }, store);
+    return store;
+  };
+
+  it('never prunes a worktree on the base branch itself, without asking any signal', () => {
+    const { deps, called } = stubDeps({ isBranchMerged: true });
+    expect(
+      buildPrunePredicate(storeWithBase(), deps)(wt({ branch: 'origin/main' })),
+    ).toBe(false);
+    expect(called.size).toBe(0);
+  });
+
+  it('never prunes a worktree on the local base branch', () => {
+    const { deps } = stubDeps({ isBranchMerged: true });
+    expect(
+      buildPrunePredicate(storeWithBase(), deps)(wt({ branch: 'main' })),
+    ).toBe(false);
+  });
+
+  it('prunes a branch git proves merged, without any forge call', () => {
+    const { deps, called } = stubDeps({ isBranchMerged: true });
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
+    expect(called.has('isBranchMergedOnForge')).toBe(false);
+    expect(called.has('isBranchClosed')).toBe(false);
+  });
+
+  it('prunes a clean, pushed branch with no unique commits, without any forge call', () => {
+    const { deps, called } = stubDeps({
+      hasNoUniqueCommits: true,
+      isWorktreeClean: true,
+      hasRemoteTrackingRef: true,
+    });
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
+    expect(called.has('isBranchMergedOnForge')).toBe(false);
+    expect(called.has('isBranchClosed')).toBe(false);
+  });
+
+  it('does not prune a dirty worktree with no unique commits', () => {
+    // Only uncommitted work: identical to a merged fast-forward at the branch
+    // level, so the dirty state is what keeps it. Falls through to the forge.
+    const { deps, called } = stubDeps({
+      hasNoUniqueCommits: true,
+      isWorktreeClean: false,
+      hasRemoteTrackingRef: true,
+    });
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(false);
+    expect(called.has('isBranchMergedOnForge')).toBe(true);
+  });
+
+  it('does not prune a never-pushed branch with no unique commits', () => {
+    // A just-created `wt create foo` worktree must survive `wt prune`.
+    const { deps, called } = stubDeps({
+      hasNoUniqueCommits: true,
+      isWorktreeClean: true,
+      hasRemoteTrackingRef: false,
+    });
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(false);
+    expect(called.has('isBranchMergedOnForge')).toBe(true);
+  });
+
+  it('prunes a branch only the forge knows is merged (rebased squash)', () => {
+    const { deps } = stubDeps({ isBranchMergedOnForge: true });
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
+  });
+
+  it('prunes a branch whose PR/MR was closed without merging', () => {
+    const { deps } = stubDeps({ isBranchClosed: true });
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
+  });
+
+  it('does not prune when every signal says no', () => {
+    const { deps } = stubDeps({});
+    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(false);
   });
 });
 
