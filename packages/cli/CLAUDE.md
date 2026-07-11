@@ -106,8 +106,23 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   errors; backs both the TUI `D` key and prune). The Orca stop runs **before**
   teardown and git removal (a live agent PTY inside the worktree makes removal
   fail "busy"), is attempted for every deletion (there is no per-worktree `ide`
-  to gate on), and is wrapped in a try/catch so Orca can never block a delete, the pure `selectWipeCandidates` (excludes current,
-  main, and detached worktrees, then applies a prune predicate),
+  to gate on), and is wrapped in a try/catch so Orca can never block a delete.
+  `deleteWorktree` funnels its three success paths (normal removal + the two
+  force fallbacks) through one `reportRemoved` helper (green `✓ Removed` line).
+  It does **not** print the "your shell is now in a gone directory" hint —
+  mid-delete that would be repainted over by the TUI's next render. Instead each
+  entry point calls the exported `warnIfCwdRemoved(cwd, suggestion?)` once, at
+  the end, when control returns to the shell: `runList` after
+  `runInteractiveList` resolves (terminal already restored — covers `D`/`P` and
+  an externally deleted cwd), and `prune.ts` after `wipeWorktrees` (**not** inside
+  `wipeWorktrees`, which the TUI `P` also calls). It's existence-based (prints
+  only if `cwd` is gone on disk), so it's path-independent, and suggests the
+  nearest surviving ancestor when no explicit target is given.
+  The pure `selectWipeCandidates` (excludes the **main and detached** worktrees —
+  both path-independent — then applies a prune predicate; the current worktree
+  is deliberately **not** excluded, so prune behaves the same regardless of
+  launch directory — `removeWorktree` still hard-refuses the main worktree and
+  the per-branch confirm is the guard),
   `buildPrunePredicate` (per-repo `base_branch` via `getEffectiveConfig`; a
   worktree is prunable when its branch `isBranchMerged` **OR** (`hasNoUniqueCommits`
   **AND** `isWorktreeClean` **AND** `hasRemoteTrackingRef`) **OR**
@@ -180,7 +195,11 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   forge reports a merged PR/MR targeting base (a squash the forge rebased onto a
   newer base, which git cannot see); **or** its PR/MR targeting base was closed
   without merging (dead branch). One per-branch confirmation each; only the
-  worktree is removed, never the branch.
+  worktree is removed, never the branch. The **current** worktree (the one you
+  ran `wt` from) is a candidate like any other — prune is path-independent; if
+  it's the one removed, a warning printed on return to the shell (via
+  `warnIfCwdRemoved`) notes the current directory no longer exists. Only `main`
+  is protected (`removeWorktree` hard-refuses it).
 - `wt config [--path]` → `src/wt/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
 - `wt skill` → `src/wt/commands/skill.ts` — prints the bundled SKILL.md to stdout
 

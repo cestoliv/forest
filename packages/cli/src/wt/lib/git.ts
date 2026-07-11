@@ -42,7 +42,17 @@ export function listWorktrees(
 ): Worktree[] {
   // Resolve symlinks so paths are consistent with git's canonical output
   const realRepoRoot = realpathSync(repoRoot);
-  const realCwd = realpathSync(cwd);
+  // `cwd` may no longer exist — e.g. the user just pruned the worktree they were
+  // standing in, and the TUI auto-refresh re-runs with that captured, now-gone
+  // path. Fall back to the raw value instead of throwing: a deleted cwd is no
+  // longer in `git worktree list`, so it simply matches nothing and marks
+  // nothing `isCurrent` (correct), rather than emptying the whole list.
+  let realCwd: string;
+  try {
+    realCwd = realpathSync(cwd);
+  } catch {
+    realCwd = cwd;
+  }
   const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
     cwd: realRepoRoot,
     encoding: 'utf8',

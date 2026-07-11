@@ -176,6 +176,14 @@ and force-confirming when git refuses (submodules or uncommitted changes), just
 like a manual `D` delete. The branch itself stays; only the worktree is removed.
 Your `teardown_commands` run before each removal.
 
+Prune (and the TUI `D` key) removes the **current** worktree — the one you ran
+`wt` from — just like any other; the behaviour doesn't change with your launch
+directory. The main worktree stays protected. When the removed worktree is the
+one you're standing in, your shell is left in a directory that no longer exists,
+so a warning printed as `wt` returns to your shell points you at a directory
+that still exists to `cd` into. The per-branch confirmation is your chance to
+say no first.
+
 Removing a worktree — via `wt prune` or the TUI `D` key — also **best-effort
 stops that worktree's Orca agent and terminal** (`orca terminal stop --worktree
 path:<worktree>`) before the teardown commands and the `git worktree remove`, so

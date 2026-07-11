@@ -2,7 +2,7 @@
 
 import pc from 'picocolors';
 import { type ConfigStore, createStore } from '../lib/config.js';
-import { prepareListItems, wipeWorktrees } from './list.js';
+import { prepareListItems, warnIfCwdRemoved, wipeWorktrees } from './list.js';
 
 export async function runPrune(
   options: { cwd?: string; store?: ConfigStore } = {},
@@ -23,4 +23,10 @@ export async function runPrune(
   if (removed.length > 0) {
     console.log(pc.green(`✓ Pruned ${removed.length} worktree(s).`));
   }
+
+  // Non-interactive exit: if prune removed the worktree this command was run
+  // from, the shell is now in a gone directory. Printed here (not inside
+  // `wipeWorktrees`, which the TUI `P` also calls) so it lands last, on return
+  // to the shell — the TUI covers its own case in `runList`.
+  warnIfCwdRemoved(cwd);
 }

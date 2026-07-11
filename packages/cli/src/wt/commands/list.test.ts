@@ -21,8 +21,10 @@ import {
   type PruneDeps,
   prepareListItems,
   selectWipeCandidates,
+  warnIfCwdRemoved,
   wipeWorktrees,
 } from './list.js';
+import { runPrune } from './prune.js';
 
 // deleteWorktree prompts to confirm removal; auto-confirm so the teardown path
 // runs. The pure list tests don't touch clack, so a module mock is safe.
@@ -149,6 +151,21 @@ describe('prepareListItems', () => {
     const current = result.items.find((w) => w.isCurrent);
     expect(current?.path).toBe(wtPath);
   });
+
+  it('still lists surviving worktrees when cwd no longer exists', async () => {
+    // Regression: after pruning the worktree you were standing in, the TUI
+    // auto-refresh re-runs with that captured, now-deleted cwd. `realpathSync`
+    // on it must not throw and empty the whole list.
+    const store = createStore(path.join(tmpDir, 'config'));
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    setGlobalConfig({ repos: [repoDir] }, store);
+    removeWorktree(repoDir, wtPath);
+
+    const result = await prepareListItems({ cwd: wtPath, store });
+    expect(result.items.some((w) => w.repoRoot === repoDir)).toBe(true);
+    expect(result.items.every((w) => !w.isCurrent)).toBe(true);
+  });
 });
 
 describe('deleteWorktree (teardown templating)', () => {
@@ -176,6 +193,75 @@ describe('deleteWorktree (teardown templating)', () => {
 
     expect(removed).toBe(true);
     expect(existsSync(path.join(tmpDir, 'feature.teardown'))).toBe(true);
+  });
+});
+
+describe('warnIfCwdRemoved', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('warns with a suggested existing target when cwd no longer exists', () => {
+    const gone = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${gone}`, { cwd: repoDir });
+    removeWorktree(repoDir, gone); // the worktree the shell was in is now gone
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    warnIfCwdRemoved(gone);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0][0]);
+    expect(msg).toContain(gone);
+    // Falls back to the nearest surviving ancestor (tmpDir still exists).
+    expect(msg).toContain(tmpDir);
+  });
+
+  it('uses an explicit suggestion when given', () => {
+    const gone = path.join(tmpDir, 'nope');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    warnIfCwdRemoved(gone, repoDir);
+
+    expect(String(warn.mock.calls[0][0])).toContain(repoDir);
+  });
+
+  it('prints nothing when cwd still exists', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    warnIfCwdRemoved(repoDir);
+    expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('runPrune (dead-cwd warning wiring)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('warns on return to the shell when prune removes the cwd worktree', async () => {
+    const base = execSync('git branch --show-current', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    }).trim();
+    // A worktree whose branch is patch-present in base (squash-merge shape), so
+    // the prune predicate offers it. It is also the cwd we hand to runPrune.
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    writeFileSync(path.join(wtPath, 'f.txt'), 'x');
+    execSync('git add . && git commit -m "feat"', { cwd: wtPath });
+    // Advance base first so the cherry-pick lands a distinct commit with the
+    // same patch id (the squash-merge shape `git cherry` detects), not a no-op.
+    writeFileSync(path.join(repoDir, 'other.txt'), 'y');
+    execSync('git add . && git commit -m "other"', { cwd: repoDir });
+    execSync('git cherry-pick feature', { cwd: repoDir });
+
+    const store = createStore(path.join(tmpDir, 'config'));
+    // Slashless base_branch → wipeWorktrees skips the (remote) fetch entirely.
+    setGlobalConfig({ repos: [repoDir], base_branch: base }, store);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await runPrune({ cwd: wtPath, store });
+
+    expect(existsSync(wtPath)).toBe(false);
+    expect(
+      warn.mock.calls.some((args) => String(args[0]).includes(wtPath)),
+    ).toBe(true);
   });
 });
 
@@ -432,9 +518,9 @@ describe('selectWipeCandidates', () => {
     expect(selectWipeCandidates(items, allMerged)).toEqual(items);
   });
 
-  it('excludes the current worktree', () => {
+  it('includes the current worktree (prune is path-independent)', () => {
     const items = [wt({ isCurrent: true })];
-    expect(selectWipeCandidates(items, allMerged)).toEqual([]);
+    expect(selectWipeCandidates(items, allMerged)).toEqual(items);
   });
 
   it('excludes the main worktree (isMain)', () => {

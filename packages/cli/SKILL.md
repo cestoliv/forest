@@ -17,7 +17,7 @@ Launch the interactive TUI. Always shows worktrees across all registered repos, 
 
 - Arrow keys — navigate
 - `Enter` — open worktree in IDE (exits the TUI)
-- `D` — delete worktree (the main worktree is tagged `(main)` and cannot be deleted — only linked worktrees can)
+- `D` — delete worktree (the main worktree is tagged `(main)` and cannot be deleted — only linked worktrees can; the worktree you're currently in **can** be deleted, and on exit a warning notes your shell is left in a removed directory — `cd` out)
 - `P` — prune all merged or closed-PR worktrees (per-branch confirmation)
 - `C` — create a new worktree
 - `A` — create a worktree and start an AI agent in it
@@ -132,6 +132,13 @@ without merging (dead branch). Each candidate is confirmed
 individually — and force-confirmed when git refuses (submodules / uncommitted
 changes), exactly like a manual `d` delete. The branch itself is left intact;
 only the worktree is removed.
+
+The current worktree (the one you ran `wt` from) is pruned like any other — the
+behaviour does not depend on your launch directory. Only `main` is protected. If
+prune (or `d`) removes the worktree you're standing in, your shell is left in a
+directory that no longer exists; a warning printed as `wt` returns to the shell
+says so and suggests a still-existing directory to `cd` into. The per-branch
+confirmation is the guard before that happens.
 
 Every worktree removal (prune **and** the TUI `d` key) first best-effort stops
 the worktree's Orca agent/terminal (`orca terminal stop --worktree

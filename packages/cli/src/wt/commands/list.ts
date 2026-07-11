@@ -1,5 +1,6 @@
 // src/commands/list.ts
 
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
@@ -82,6 +83,10 @@ export interface ListItems {
 export async function prepareListItems(
   options: { cwd?: string; store?: ConfigStore } = {},
 ): Promise<ListItems> {
+  // Keep this synchronous under the hood (no `await` that yields to the
+  // macrotask queue, e.g. a network call): a refresh tick that yielded could let
+  // a keypress land mid-tick and fire this tick's `render()` after the TUI has
+  // resolved, repainting over the on-exit `warnIfCwdRemoved` hint.
   const { cwd = process.cwd(), store = createStore() } = options;
 
   // Auto-register the current repo for discovery (never scope to it): the list
@@ -211,6 +216,12 @@ export async function runList(
     },
     { autoRefreshMinutes },
   );
+
+  // The TUI has torn down and restored the terminal by the time the promise
+  // resolves, so this is the last thing printed before the shell prompt — the
+  // right place for the dead-cwd hint (covers `D` and `P`, and an externally
+  // deleted cwd). Uses the cwd captured at startup.
+  warnIfCwdRemoved(cwd);
 }
 
 /**
@@ -227,6 +238,17 @@ export async function deleteWorktree(
     message: `Remove worktree ${pc.bold(item.branch)}? This cannot be undone.`,
   });
   if (clack.isCancel(confirmed) || !confirmed) return false;
+
+  // Single success exit for all three removal paths (normal + two force
+  // fallbacks): report the removal. The "your shell is now in a gone directory"
+  // hint is deliberately NOT emitted here — it only matters once control returns
+  // to the shell, and printed mid-delete it gets repainted over by the TUI's
+  // next render. Each entry point prints it once at the end via
+  // `warnIfCwdRemoved` instead.
+  const reportRemoved = (label: string): true => {
+    console.log(pc.green(`${label} ${item.branch}`));
+    return true;
+  };
 
   // Stop the worktree's Orca agent/terminal first: a live PTY whose cwd sits
   // inside the worktree can make teardown commands and `git worktree remove`
@@ -268,8 +290,7 @@ export async function deleteWorktree(
 
   try {
     removeWorktree(item.repoRoot, item.path);
-    console.log(pc.green(`✓ Removed ${item.branch}`));
-    return true;
+    return reportRemoved('✓ Removed');
   } catch (err) {
     const msg = String(err);
     if (msg.includes('cannot be moved or removed')) {
@@ -282,8 +303,7 @@ export async function deleteWorktree(
       if (clack.isCancel(force) || !force) return false;
       try {
         removeWorktree(item.repoRoot, item.path, true);
-        console.log(pc.green(`✓ Force-removed ${item.branch}`));
-        return true;
+        return reportRemoved('✓ Force-removed');
       } catch (err2) {
         console.error(pc.red(`✗ Failed to force-remove: ${String(err2)}`));
         return false;
@@ -302,8 +322,7 @@ export async function deleteWorktree(
       if (clack.isCancel(force) || !force) return false;
       try {
         removeWorktree(item.repoRoot, item.path, true);
-        console.log(pc.green(`✓ Force-removed ${item.branch}`));
-        return true;
+        return reportRemoved('✓ Force-removed');
       } catch (err2) {
         console.error(pc.red(`✗ Failed to force-remove: ${String(err2)}`));
         return false;
@@ -316,19 +335,17 @@ export async function deleteWorktree(
 
 /**
  * Pure filter: keep only worktrees that are safe prunable candidates (merged or
- * closed). Excludes the current worktree, the main worktree (`isMain`), and
- * detached-HEAD worktrees; then applies the injected `isPrunable` predicate.
+ * closed). Excludes the main worktree (`isMain`) and detached-HEAD worktrees —
+ * both path-independent — then applies the injected `isPrunable` predicate. The
+ * current worktree is **not** excluded: prune treats the worktree you launched
+ * from like any other (the per-branch confirm in `deleteWorktree` is the guard).
  */
 export function selectWipeCandidates(
   items: Worktree[],
   isPrunable: (wt: Worktree) => boolean,
 ): Worktree[] {
   return items.filter(
-    (wt) =>
-      !wt.isCurrent &&
-      !wt.isMain &&
-      wt.branch !== '(detached)' &&
-      isPrunable(wt),
+    (wt) => !wt.isMain && wt.branch !== '(detached)' && isPrunable(wt),
   );
 }
 
@@ -459,4 +476,37 @@ export async function wipeWorktrees(
     }
   }
   return removed;
+}
+
+/** The nearest ancestor of `p` that still exists on disk (the filesystem root
+ * always does), used as a safe `cd` suggestion when `p` itself is gone. */
+function nearestExistingAncestor(p: string): string {
+  let dir = path.dirname(p);
+  while (dir !== path.dirname(dir)) {
+    if (existsSync(dir)) return dir;
+    dir = path.dirname(dir);
+  }
+  return dir;
+}
+
+/**
+ * Print a one-line hint **iff** `cwd` no longer exists on disk — i.e. the user
+ * removed the worktree their shell was standing in. Call this once at each entry
+ * point, at the very end, when control is about to return to the shell (and, for
+ * the TUI, after the terminal has been restored) so it lands as the last thing
+ * printed and can't be repainted over.
+ *
+ * It's existence-based, which makes it path-independent: removing some *other*
+ * worktree leaves `cwd` intact and this stays silent; only losing the directory
+ * you're actually in triggers it. When no explicit `cd` target is given it
+ * suggests the nearest still-existing ancestor of the gone directory.
+ */
+export function warnIfCwdRemoved(cwd: string, suggestion?: string): void {
+  if (existsSync(cwd)) return;
+  const target = suggestion ?? nearestExistingAncestor(cwd);
+  console.warn(
+    pc.yellow(
+      `⚠ Your current directory no longer exists (${cwd}) — cd ${target} (or elsewhere).`,
+    ),
+  );
 }
