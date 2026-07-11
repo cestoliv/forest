@@ -182,6 +182,15 @@ old merged/closed PR can be flagged — the per-branch confirmation prompt is th
 backstop. Always runs across all registered repos (each against its own
 `base_branch`). The TUI exposes the same action under the `p` key.
 
+Once at least one worktree is removed, prune fast-forwards each affected repo's
+**main worktree** (`git pull --ff-only`) so the primary checkout picks up the
+merged changes. It only ever fast-forwards — never fabricating a merge/conflict
+in the primary checkout — and skips-with-a-note (never fails the prune) when the
+main worktree isn't on `base_branch`, has uncommitted changes, has no matching
+remote, or the fast-forward fails (message surfaced, pull manually). Pass
+`--no-pull` to skip it; the TUI `p` key **always** auto-pulls (`--no-pull` is
+CLI-only).
+
 ### `wt config`
 
 Open the global config file in `$EDITOR` (defaults to `nano`).

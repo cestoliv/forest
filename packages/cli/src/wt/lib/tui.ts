@@ -585,6 +585,11 @@ export async function runInteractiveList(
             const removedSet = new Set(removed);
             allItems = allItems.filter((w) => !removedSet.has(w));
             filtered = filtered.filter((w) => !removedSet.has(w));
+            // Hold the `✓ Removed` summary and the post-wipe pull result on
+            // screen until a keypress, so the immediate re-render below doesn't
+            // erase them. Mirrors the nothing-pruned branch.
+            process.stdout.write(pc.dim('\nPress any key to continue…'));
+            await waitForKeypress();
           } else {
             // Nothing was pruned — `onWipe` printed its result (e.g. "No merged
             // worktrees to wipe."). Hold it on screen until a keypress so the

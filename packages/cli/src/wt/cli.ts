@@ -68,9 +68,13 @@ program
   .description(
     'Remove worktrees whose branch has been merged into the base branch',
   )
-  .action(async () => {
+  .option(
+    '--no-pull',
+    'Skip pulling the main worktree after pruning merged worktrees',
+  )
+  .action(async (options) => {
     const { runPrune } = await import('./commands/prune.js');
-    await runPrune();
+    await runPrune({ pull: options.pull });
   });
 
 program

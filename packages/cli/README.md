@@ -225,6 +225,24 @@ or closed PR will match it — the per-branch confirmation is your backstop. The
 TUI exposes the same action under the `P` key. Always runs across all registered
 repos (each against its own `base_branch`).
 
+### Auto-pull after prune
+
+Once at least one worktree is removed, `wt prune` fast-forwards the affected
+repos' **main worktree** (`git pull --ff-only`) so your primary checkout picks
+up the changes that were just merged. It only ever fast-forwards — never
+fabricates a merge commit or a conflict in the primary checkout — and each repo
+is skipped (with a note) rather than failing the prune when it can't pull:
+
+- the main worktree isn't on the `base_branch` (detached, or a feature is
+  checked out there);
+- the main worktree has uncommitted changes;
+- the repo has no matching remote;
+- the fast-forward itself fails (e.g. the branch has diverged) — the message is
+  surfaced and you're told to pull manually.
+
+Pass `--no-pull` to skip this entirely. The TUI `P` key **always** auto-pulls
+(there is no TUI opt-out; `--no-pull` is CLI-only).
+
 ## Configuration
 
 Edit with `wt config` (`wt config --path` prints the file location —

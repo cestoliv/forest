@@ -21,6 +21,7 @@ import {
   isWorktreeClean,
   listWorktreeDirtyFiles,
   listWorktrees,
+  pullFfOnly,
   remoteExists,
   removeWorktree,
   splitBaseRef,
@@ -421,16 +422,90 @@ export function buildPrunePredicate(
   };
 }
 
+/** The git helpers `pullMainWorktrees` consults, injectable for tests. */
+export interface PullDeps {
+  pull: typeof pullFfOnly;
+  isWorktreeClean: typeof isWorktreeClean;
+  remoteExists: typeof remoteExists;
+}
+
+/**
+ * After a prune, fast-forward each affected repo's main worktree so the primary
+ * checkout picks up the merged changes. `removedRepoRoots` is the set of repo
+ * roots whose worktrees were just removed (deduped by the caller).
+ *
+ * Guards are skip-with-reason — never throws out of the loop, so a single
+ * repo's failure can't abort pruning the rest:
+ * - main worktree not found → silent skip.
+ * - main not on the base branch (detached, or a feature checked out) → skip note.
+ * - dirty main → warn and skip (never fabricate a stash/merge).
+ * - no matching remote → clean skip note.
+ * - otherwise `git pull --ff-only`; report success or surface git's message.
+ */
+export async function pullMainWorktrees(
+  items: Worktree[],
+  removedRepoRoots: Set<string>,
+  store: ConfigStore,
+  deps: Partial<PullDeps> = {},
+): Promise<void> {
+  const {
+    pull = pullFfOnly,
+    isWorktreeClean: clean = isWorktreeClean,
+    remoteExists: hasRemote = remoteExists,
+  } = deps;
+
+  for (const repoRoot of removedRepoRoots) {
+    const project = path.basename(repoRoot);
+    const mainWt = items.find((w) => w.repoRoot === repoRoot && w.isMain);
+    if (!mainWt) continue;
+
+    const base = getEffectiveConfig(repoRoot, store).base_branch;
+    const { remote, branch } = splitBaseRef(base);
+
+    if (mainWt.branch !== branch) {
+      console.log(
+        pc.dim(
+          `Skipped pull ${project} — main worktree is on ${mainWt.branch}, not ${branch}`,
+        ),
+      );
+      continue;
+    }
+    if (!clean(mainWt.path)) {
+      console.warn(
+        pc.yellow(`⚠ Skipped pull ${project} — uncommitted changes`),
+      );
+      continue;
+    }
+    if (!hasRemote(repoRoot, remote)) {
+      console.log(pc.dim(`Skipped pull ${project} — no "${remote}" remote`));
+      continue;
+    }
+
+    try {
+      pull(mainWt.path);
+      console.log(pc.green(`✓ Pulled ${project} (${branch})`));
+    } catch (err) {
+      console.warn(
+        pc.yellow(
+          `⚠ Could not pull ${project}: ${err instanceof Error ? err.message : String(err)} — pull manually`,
+        ),
+      );
+    }
+  }
+}
+
 /**
  * Find every merged worktree among `items` and remove it via `deleteWorktree`
  * (per-branch confirmation + force-confirmation). Optionally best-effort
  * fetches each repo's remote first so merge detection sees up-to-date refs.
- * Returns the worktrees that were actually removed.
+ * After a successful wipe, unless `pull` is false, fast-forwards each affected
+ * repo's main worktree (`pullMainWorktrees`). Returns the worktrees that were
+ * actually removed.
  */
 export async function wipeWorktrees(
   items: Worktree[],
   store: ConfigStore,
-  options: { fetch?: boolean } = {},
+  options: { fetch?: boolean; pull?: boolean } = {},
 ): Promise<Worktree[]> {
   if (options.fetch) {
     const seen = new Set<string>();
@@ -474,6 +549,14 @@ export async function wipeWorktrees(
     if (await deleteWorktree(candidate, store)) {
       removed.push(candidate);
     }
+  }
+
+  if (removed.length > 0 && (options.pull ?? true)) {
+    await pullMainWorktrees(
+      items,
+      new Set(removed.map((w) => w.repoRoot)),
+      store,
+    );
   }
   return removed;
 }

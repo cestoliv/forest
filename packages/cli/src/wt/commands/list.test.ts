@@ -12,7 +12,7 @@ import path from 'node:path';
 import * as clack from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
-import { removeWorktree, type Worktree } from '../lib/git.js';
+import { pullFfOnly, removeWorktree, type Worktree } from '../lib/git.js';
 import { stopOrcaWorktree } from '../lib/orca.js';
 import { runCommands } from '../lib/setup.js';
 import {
@@ -20,6 +20,7 @@ import {
   deleteWorktree,
   type PruneDeps,
   prepareListItems,
+  pullMainWorktrees,
   selectWipeCandidates,
   warnIfCwdRemoved,
   wipeWorktrees,
@@ -45,7 +46,12 @@ vi.mock('../lib/orca.js', async (importOriginal) => ({
 // make the calls observable so their relative ordering can be asserted.
 vi.mock('../lib/git.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/git.js')>();
-  return { ...actual, removeWorktree: vi.fn(actual.removeWorktree) };
+  return {
+    ...actual,
+    removeWorktree: vi.fn(actual.removeWorktree),
+    // Spy on the post-prune pull so tests can assert it without a real remote.
+    pullFfOnly: vi.fn(() => {}),
+  };
 });
 vi.mock('../lib/setup.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/setup.js')>();
@@ -552,5 +558,202 @@ describe('selectWipeCandidates', () => {
       (w) => w.branch === 'merged' || w.branch === 'main',
     );
     expect(result).toEqual([merged]);
+  });
+});
+
+describe('pullMainWorktrees', () => {
+  const wt = (over: Partial<Worktree>): Worktree => ({
+    path: '/r/wt',
+    branch: 'feature',
+    isCurrent: false,
+    isMain: false,
+    repoRoot: '/r',
+    ...over,
+  });
+  const mainWt = (repoRoot: string, over: Partial<Worktree> = {}): Worktree =>
+    wt({ path: repoRoot, repoRoot, branch: 'main', isMain: true, ...over });
+
+  // base_branch `origin/main` → splitBaseRef → { remote: 'origin', branch: 'main' }.
+  const storeWithBase = () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ base_branch: 'origin/main' }, store);
+    return store;
+  };
+  const okDeps = (pull: (p: string) => void) => ({
+    pull,
+    isWorktreeClean: () => true,
+    remoteExists: () => true,
+  });
+
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('pulls the main worktree of a pruned repo', async () => {
+    const pull = vi.fn();
+    await pullMainWorktrees(
+      [mainWt('/r'), wt({})],
+      new Set(['/r']),
+      storeWithBase(),
+      okDeps(pull),
+    );
+    expect(pull).toHaveBeenCalledTimes(1);
+    expect(pull).toHaveBeenCalledWith('/r');
+  });
+
+  it('skips a repo whose main is not on the base branch, still pulls the others', async () => {
+    const pull = vi.fn();
+    await pullMainWorktrees(
+      [mainWt('/a', { branch: 'wip' }), mainWt('/b')],
+      new Set(['/a', '/b']),
+      storeWithBase(),
+      okDeps(pull),
+    );
+    expect(pull).toHaveBeenCalledTimes(1);
+    expect(pull).toHaveBeenCalledWith('/b');
+  });
+
+  it('skips a repo whose main worktree is missing', async () => {
+    const pull = vi.fn();
+    await pullMainWorktrees([wt({})], new Set(['/r']), storeWithBase(), {
+      ...okDeps(pull),
+    });
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it('skips a dirty main worktree', async () => {
+    const pull = vi.fn();
+    await pullMainWorktrees([mainWt('/r')], new Set(['/r']), storeWithBase(), {
+      pull,
+      isWorktreeClean: () => false,
+      remoteExists: () => true,
+    });
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it('skips a repo with no matching remote', async () => {
+    const pull = vi.fn();
+    await pullMainWorktrees([mainWt('/r')], new Set(['/r']), storeWithBase(), {
+      pull,
+      isWorktreeClean: () => true,
+      remoteExists: () => false,
+    });
+    expect(pull).not.toHaveBeenCalled();
+  });
+
+  it('does not let a thrown pull abort the other repos', async () => {
+    const pull = vi.fn((p: string) => {
+      if (p === '/a') throw new Error('diverged');
+    });
+    await expect(
+      pullMainWorktrees(
+        [mainWt('/a'), mainWt('/b')],
+        new Set(['/a', '/b']),
+        storeWithBase(),
+        okDeps(pull),
+      ),
+    ).resolves.toBeUndefined();
+    expect(pull).toHaveBeenCalledTimes(2);
+    expect(pull).toHaveBeenCalledWith('/b');
+  });
+
+  it('pulls a repo once even with multiple pruned worktrees', async () => {
+    const pull = vi.fn();
+    await pullMainWorktrees(
+      [mainWt('/r'), wt({ path: '/r/f1' }), wt({ path: '/r/f2' })],
+      new Set(['/r']),
+      storeWithBase(),
+      okDeps(pull),
+    );
+    expect(pull).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wipeWorktrees (post-prune pull)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /**
+   * A merged worktree on `branch`, patch-present in `main`. Mirrors the gotcha
+   * in `makeMergedWorktree`: advance `main` with an unrelated commit before the
+   * cherry-pick so the same patch lands under a different sha.
+   */
+  function makeMerged(branch: string): Worktree {
+    const wtPath = path.join(tmpDir, `my-repo-${branch}`);
+    execSync(`git worktree add -b ${branch} ${wtPath}`, { cwd: repoDir });
+    writeFileSync(path.join(wtPath, `${branch}.txt`), 'x');
+    execSync('git add .', { cwd: wtPath });
+    execSync(`git commit -m "feat ${branch}"`, { cwd: wtPath });
+    writeFileSync(path.join(repoDir, `other-${branch}.txt`), 'y');
+    execSync('git add .', { cwd: repoDir });
+    execSync(`git commit -m "other ${branch}"`, { cwd: repoDir });
+    execSync(`git cherry-pick ${branch}`, { cwd: repoDir });
+    return {
+      path: wtPath,
+      branch,
+      isCurrent: false,
+      isMain: false,
+      repoRoot: repoDir,
+    };
+  }
+
+  const mainItem = (): Worktree => ({
+    path: repoDir,
+    branch: 'main',
+    isCurrent: false,
+    isMain: true,
+    repoRoot: repoDir,
+  });
+
+  beforeEach(() => {
+    execSync('git branch -M main', { cwd: repoDir });
+    // remoteExists is real on the pull path; a self-pointing origin satisfies it
+    // (pullFfOnly itself is mocked, so no real fetch happens).
+    execSync(`git remote add origin ${repoDir}`, { cwd: repoDir });
+    vi.mocked(pullFfOnly).mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  it('pulls the main worktree once after a successful wipe (default)', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const feature = makeMerged('feature');
+    setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
+
+    const removed = await wipeWorktrees([mainItem(), feature], store);
+
+    expect(removed.map((w) => w.branch)).toEqual(['feature']);
+    expect(pullFfOnly).toHaveBeenCalledTimes(1);
+    expect(pullFfOnly).toHaveBeenCalledWith(repoDir);
+  });
+
+  it('does not pull when { pull: false }', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const feature = makeMerged('feature');
+    setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
+
+    const removed = await wipeWorktrees([mainItem(), feature], store, {
+      pull: false,
+    });
+
+    expect(removed.map((w) => w.branch)).toEqual(['feature']);
+    expect(pullFfOnly).not.toHaveBeenCalled();
+  });
+
+  it('pulls the repo once even when several worktrees were pruned', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const f1 = makeMerged('feat-one');
+    const f2 = makeMerged('feat-two');
+    setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
+
+    const removed = await wipeWorktrees([mainItem(), f1, f2], store);
+
+    expect(removed.map((w) => w.branch).sort()).toEqual([
+      'feat-one',
+      'feat-two',
+    ]);
+    expect(pullFfOnly).toHaveBeenCalledTimes(1);
+    expect(pullFfOnly).toHaveBeenCalledWith(repoDir);
   });
 });
