@@ -483,6 +483,24 @@ export function fetchRemote(repoRoot: string, remote = 'origin'): void {
 }
 
 /**
+ * Fast-forward the worktree's current branch to its upstream (`git pull
+ * --ff-only`). Used after prune removes merged worktrees so the main worktree
+ * picks up the merged changes.
+ *
+ * Unlike the fail-closed query helpers, this **throws on failure** so the caller
+ * can surface git's message. `--ff-only` is deliberate: it never fabricates a
+ * merge commit or a conflict in the primary checkout — it either fast-forwards
+ * cleanly or refuses.
+ */
+export function pullFfOnly(worktreePath: string): void {
+  execFileSync('git', ['pull', '--ff-only'], {
+    cwd: worktreePath,
+    stdio: 'pipe',
+    timeout: 30000,
+  });
+}
+
+/**
  * Whether `repoRoot` has a git remote named `remote`. Used to skip (and warn
  * about) fetching in local-only repos that have no remote configured. Fails
  * closed (`false`) on any error.

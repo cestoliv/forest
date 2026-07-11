@@ -5,9 +5,9 @@ import { type ConfigStore, createStore } from '../lib/config.js';
 import { prepareListItems, warnIfCwdRemoved, wipeWorktrees } from './list.js';
 
 export async function runPrune(
-  options: { cwd?: string; store?: ConfigStore } = {},
+  options: { cwd?: string; store?: ConfigStore; pull?: boolean } = {},
 ): Promise<void> {
-  const { cwd = process.cwd(), store = createStore() } = options;
+  const { cwd = process.cwd(), store = createStore(), pull = true } = options;
   const { items } = await prepareListItems({ cwd, store });
 
   if (items.length === 0) {
@@ -19,7 +19,7 @@ export async function runPrune(
     return;
   }
 
-  const removed = await wipeWorktrees(items, store, { fetch: true });
+  const removed = await wipeWorktrees(items, store, { fetch: true, pull });
   if (removed.length > 0) {
     console.log(pc.green(`✓ Pruned ${removed.length} worktree(s).`));
   }
