@@ -147,6 +147,18 @@ describe('listWorktrees', () => {
     );
     expect(worktrees[0].lastCommit).toBe('');
   });
+
+  it('tolerates a non-existent cwd without throwing or emptying the list', () => {
+    // A deleted cwd (e.g. the just-pruned current worktree, seen again on the
+    // TUI auto-refresh) must not make `realpathSync(cwd)` throw. The worktrees
+    // still list; none is marked current since the gone path matches nothing.
+    const worktrees = listWorktrees(
+      repoDir,
+      path.join(tmpDir, 'does-not-exist'),
+    );
+    expect(worktrees.some((w) => w.path === repoDir)).toBe(true);
+    expect(worktrees.every((w) => !w.isCurrent)).toBe(true);
+  });
 });
 
 describe('addWorktree', () => {
@@ -186,6 +198,24 @@ describe('removeWorktree', () => {
     removeWorktree(repoDir, wtPath);
     const worktrees = listWorktrees(repoDir, repoDir);
     expect(worktrees).toHaveLength(1);
+  });
+
+  it('removes the worktree that is the process cwd (cwd-independent)', () => {
+    // Documents that `removeWorktree` uses `cwd: repoRoot`, never
+    // `process.cwd()`, so pruning the worktree you are standing in works.
+    const wtPath = path.join(tmpDir, 'repo-cwd');
+    addWorktree(repoDir, wtPath, 'cwd-wt', 'HEAD');
+    // singleFork/serial: restore to the pre-test cwd (a stable dir outside
+    // tmpDir, which afterEach deletes) so no later test inherits a gone cwd.
+    const origCwd = process.cwd();
+    process.chdir(realpathSync(wtPath));
+    try {
+      removeWorktree(repoDir, wtPath);
+      const worktrees = listWorktrees(repoDir, repoDir);
+      expect(worktrees.find((w) => w.branch === 'cwd-wt')).toBeUndefined();
+    } finally {
+      process.chdir(origCwd);
+    }
   });
 
   it('force-removes a worktree with uncommitted changes', () => {

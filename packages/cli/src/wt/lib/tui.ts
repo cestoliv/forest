@@ -557,12 +557,6 @@ export async function runInteractiveList(
               );
               return;
             }
-            if (item.isCurrent) {
-              process.stdout.write(
-                pc.red('\nCannot delete the worktree you are currently in.\n'),
-              );
-              return;
-            }
             interacting = true;
             detachListener();
             cleanupRawMode();
