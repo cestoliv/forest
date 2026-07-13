@@ -8,6 +8,7 @@
 // same string the Zed path builds), or just an interactive shell when opening
 // without an agent.
 import { spawn } from 'node:child_process';
+import * as clack from '@clack/prompts';
 
 // ---------------------------------------------------------------------------
 // Pure functions (no I/O) — unit-tested directly.
@@ -175,6 +176,38 @@ export function isOrcaSuccess(result: OrcaResult): boolean {
   return true;
 }
 
+/**
+ * Whether an `orca … --json` failure is a `selector_not_found` — the runtime
+ * couldn't resolve the `--worktree path:<abs>` selector. For `terminal create`
+ * this almost always means the repo has *external-worktree visibility* turned
+ * off in Orca (the default for newly-added repos since Orca 1.4): `wt` creates
+ * its worktrees with plain git, and Orca ignores every external (non-Orca-made)
+ * worktree for such a repo, so the path selector misses. Fails closed (false)
+ * on non-JSON output or any other error shape.
+ */
+export function isSelectorNotFound(result: OrcaResult): boolean {
+  try {
+    const parsed = JSON.parse(result.stdout) as {
+      error?: { code?: unknown };
+    };
+    return parsed.error?.code === 'selector_not_found';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Actionable hint shown when `terminal create` fails with `selector_not_found`
+ * — explains the likely cause (external-worktree visibility off) and the fix,
+ * so the cryptic "create failed" line becomes something the user can act on.
+ */
+export const SELECTOR_NOT_FOUND_HINT =
+  "✗ orca terminal create failed: Orca can't see this worktree.\n" +
+  '  wt creates worktrees with plain git, but this repo has external-worktree\n' +
+  '  visibility turned off in Orca (the default for newly-added repos), so Orca\n' +
+  '  ignores them and the worktree selector misses.\n' +
+  '  Fix: in Orca, open this repo and enable showing its external worktrees.';
+
 // ---------------------------------------------------------------------------
 // Side-effecting wrappers (thin; runner + sleep injectable for tests).
 // ---------------------------------------------------------------------------
@@ -192,6 +225,15 @@ export type OrcaRunner = (args: string[]) => Promise<OrcaResult>;
 
 /** Suspends for `ms` — injectable so tests don't actually wait. */
 export type Sleeper = (ms: number) => Promise<void>;
+
+/**
+ * Ask the user whether to retry after a fixable `terminal create` failure
+ * (external-worktree visibility off). Returns true to retry. Injectable so
+ * tests don't touch a real prompt; the default (`defaultConfirmRetry`) is
+ * TTY-gated, so a non-interactive caller (the daemon) never prompts and just
+ * gives up.
+ */
+export type RetryConfirm = () => Promise<boolean>;
 
 /** Delay between `orca status` polls while waiting for the runtime to come up. */
 const RUNTIME_POLL_DELAY_MS = 500;
@@ -287,6 +329,22 @@ function defaultRunner(
 const defaultSleep: Sleeper = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Default retry prompt for the `selector_not_found` path. TTY-gated: with no
+ * interactive stdin (the daemon, a piped run) it returns false immediately so
+ * the flow reports the hint and gives up rather than blocking on a prompt that
+ * can't be answered. Otherwise it asks the user to confirm they've enabled the
+ * repo's external-worktree visibility in Orca, and retries on yes.
+ */
+const defaultConfirmRetry: RetryConfirm = async () => {
+  if (!process.stdin.isTTY) return false;
+  const proceed = await clack.confirm({
+    message:
+      'Enabled external-worktree visibility for this repo in Orca? Retry terminal create?',
+  });
+  return !clack.isCancel(proceed) && proceed === true;
+};
+
 /** True when a `status` result shows the runtime reachable (exit 0 + reachable). */
 function statusReachable(status: OrcaResult): boolean {
   return status.code === 0 && isRuntimeReachable(status.stdout);
@@ -353,6 +411,12 @@ function reportSpawnFailure(
  * When `focus` is set (interactive runs), the created tab is revealed with a
  * best-effort `terminal switch` — a failed/absent switch never fails the launch
  * (the terminal is already created and running).
+ *
+ * A `selector_not_found` on `terminal create` (Orca can't see the plain-git
+ * worktree — usually external-worktree visibility being off) is fixable in
+ * Orca's UI, so `confirmRetry` guides the user and re-runs the create until it
+ * works or they decline. `confirmRetry` returns false for a non-interactive
+ * caller (the daemon), so batch dispatch just reports the hint and gives up.
  */
 async function runOrcaFlow(
   cmds: OrcaCommands,
@@ -360,6 +424,7 @@ async function runOrcaFlow(
   report: (msg: string) => void,
   sleep: Sleeper,
   focus: boolean,
+  confirmRetry: RetryConfirm,
 ): Promise<boolean> {
   if (!(await ensureRuntime(cmds, runner, report, sleep))) return false;
 
@@ -371,7 +436,16 @@ async function runOrcaFlow(
     return false;
   }
 
-  const term = await runner(cmds.terminalCreate);
+  let term = await runner(cmds.terminalCreate);
+  // Guide-and-retry the fixable case: the worktree is invisible to Orca. The
+  // hint (which already carries the "✗ … failed" line) is reprinted each round;
+  // a declined/non-TTY confirm ends here without the generic failure line, since
+  // the hint is the more useful message.
+  while (!isOrcaSuccess(term) && isSelectorNotFound(term)) {
+    report(SELECTOR_NOT_FOUND_HINT);
+    if (!(await confirmRetry())) return false;
+    term = await runner(cmds.terminalCreate);
+  }
   if (!isOrcaSuccess(term)) {
     report(
       `✗ orca terminal create failed${term.stderr ? `: ${term.stderr.trim()}` : ''}.`,
@@ -401,6 +475,8 @@ interface OrcaLaunchBase {
   report?: (msg: string) => void;
   /** Injectable delay for the runtime-launch poll (tests pass a no-op). */
   sleep?: Sleeper;
+  /** Injectable retry prompt for the `selector_not_found` path (tests stub it). */
+  confirmRetry?: RetryConfirm;
 }
 
 /**
@@ -416,6 +492,7 @@ export function openWorktreeInOrca(opts: OrcaLaunchBase): Promise<boolean> {
     focus,
     runner = defaultRunner,
     sleep = defaultSleep,
+    confirmRetry = defaultConfirmRetry,
   } = opts;
   const report = opts.report ?? ((m) => console.log(m));
   return runOrcaFlow(
@@ -424,6 +501,7 @@ export function openWorktreeInOrca(opts: OrcaLaunchBase): Promise<boolean> {
     report,
     sleep,
     focus ?? false,
+    confirmRetry,
   );
 }
 
@@ -444,6 +522,7 @@ export function startAgentInOrca(
     focus,
     runner = defaultRunner,
     sleep = defaultSleep,
+    confirmRetry = defaultConfirmRetry,
   } = opts;
   const report = opts.report ?? ((m) => console.log(m));
   return runOrcaFlow(
@@ -452,6 +531,7 @@ export function startAgentInOrca(
     report,
     sleep,
     focus ?? false,
+    confirmRetry,
   );
 }
 
