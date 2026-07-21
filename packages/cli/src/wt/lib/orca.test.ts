@@ -8,10 +8,12 @@ import {
   buildSwitchCommand,
   isOrcaSuccess,
   isRuntimeReachable,
+  isSelectorNotFound,
   type OrcaResult,
   type OrcaRunner,
   openWorktreeInOrca,
   parseTerminalHandle,
+  SELECTOR_NOT_FOUND_HINT,
   startAgentInOrca,
   stopOrcaWorktree,
 } from './orca.js';
@@ -201,6 +203,37 @@ describe('isOrcaSuccess', () => {
   });
 });
 
+describe('isSelectorNotFound', () => {
+  it('is true when the JSON error code is selector_not_found', () => {
+    expect(
+      isSelectorNotFound({
+        code: 1,
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'selector_not_found' },
+        }),
+        stderr: '',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false for a different error code, ok:false, or non-JSON', () => {
+    expect(
+      isSelectorNotFound({
+        code: 1,
+        stdout: JSON.stringify({ ok: false, error: { code: 'other' } }),
+        stderr: '',
+      }),
+    ).toBe(false);
+    expect(
+      isSelectorNotFound({ code: 0, stdout: '{"ok":false}', stderr: '' }),
+    ).toBe(false);
+    expect(isSelectorNotFound({ code: 1, stdout: 'boom', stderr: '' })).toBe(
+      false,
+    );
+  });
+});
+
 // Canned results keyed by the leading argv token. Each entry may be a single
 // result (repeated) or an array (a queue consumed per call, repeating the last
 // once drained) — the queue form drives the runtime-launch poll.
@@ -230,6 +263,16 @@ const ENOENT: OrcaResult = {
   code: null,
   stdout: '',
   stderr: 'spawn orca ENOENT',
+};
+// `terminal create` refusing the worktree selector (external-worktree
+// visibility off) — the fixable, retryable failure.
+const SELECTOR_NOT_FOUND: OrcaResult = {
+  code: 1,
+  stdout: JSON.stringify({
+    ok: false,
+    error: { code: 'selector_not_found' },
+  }),
+  stderr: '',
 };
 
 function toQueue(spec: ResultSpec): OrcaResult[] {
@@ -309,6 +352,49 @@ describe('startAgentInOrca', () => {
     });
     const started = await startAgentInOrca({ ...base, runner });
     expect(started).toBe(false);
+  });
+
+  it('retries terminal create after a selector_not_found once the user confirms', async () => {
+    // First create fails (worktree invisible); after the user flips visibility
+    // and confirms, the retry succeeds.
+    const runner = makeRunner({ terminalCreate: [SELECTOR_NOT_FOUND, OK] });
+    const lines: string[] = [];
+    const confirmRetry = vi.fn(async () => true);
+    const started = await startAgentInOrca({
+      ...base,
+      runner,
+      confirmRetry,
+      report: (m) => lines.push(m),
+    });
+    expect(started).toBe(true);
+    // Two create attempts; the hint was shown; the user was asked once.
+    expect(
+      runner.calls.filter((c) => callKinds([c])[0] === 'terminal').length,
+    ).toBe(2);
+    expect(confirmRetry).toHaveBeenCalledTimes(1);
+    expect(lines).toContain(SELECTOR_NOT_FOUND_HINT);
+  });
+
+  it('gives up (not started) on selector_not_found when the user declines the retry', async () => {
+    const runner = makeRunner({ terminalCreate: SELECTOR_NOT_FOUND });
+    const lines: string[] = [];
+    const started = await startAgentInOrca({
+      ...base,
+      runner,
+      confirmRetry: async () => false,
+      report: (m) => lines.push(m),
+    });
+    expect(started).toBe(false);
+    // Only one create attempt (no retry); the hint replaces the generic line.
+    expect(
+      runner.calls.filter((c) => callKinds([c])[0] === 'terminal').length,
+    ).toBe(1);
+    expect(lines).toContain(SELECTOR_NOT_FOUND_HINT);
+    // Exactly one "…create failed" message (the hint) — no duplicate generic
+    // failure line stacked on top of it.
+    expect(
+      lines.filter((l) => l.includes('orca terminal create failed')).length,
+    ).toBe(1);
   });
 
   it('auto-launches Orca when the runtime is down, then proceeds once reachable', async () => {
