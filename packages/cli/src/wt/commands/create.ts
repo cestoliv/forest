@@ -18,6 +18,7 @@ import {
   remoteExists,
   resolveWorktreePath,
   setUpstreamTracking,
+  slugifyBranch,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { openWorktreeInOrca } from '../lib/orca.js';
@@ -139,6 +140,19 @@ export async function prepareWorktree(
     const entered = await branchInput(repoRoot);
     if (!entered) return null;
     branch = entered;
+  }
+
+  // Normalize into a valid git branch name so free-form input (e.g. "detection
+  // issues 13-07") doesn't make `git worktree add -b` fail. Reported when it
+  // changes so the user knows the branch they got.
+  const requested = branch;
+  branch = slugifyBranch(branch);
+  if (!branch) {
+    report(pc.red(`"${requested}" is not a usable branch name.`));
+    return null;
+  }
+  if (branch !== requested) {
+    report(pc.dim(`Using branch name "${branch}" (from "${requested}")`));
   }
 
   registerRepo(repoRoot, store);

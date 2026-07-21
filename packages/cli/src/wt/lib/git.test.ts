@@ -28,6 +28,7 @@ import {
   removeWorktree,
   resolveWorktreePath,
   setUpstreamTracking,
+  slugifyBranch,
   splitBaseRef,
 } from './git.js';
 
@@ -376,6 +377,51 @@ describe('remoteExists', () => {
 
   it('fails closed (false) on a non-repo path', () => {
     expect(remoteExists(path.join(tmpDir, 'does-not-exist'))).toBe(false);
+  });
+});
+
+describe('slugifyBranch', () => {
+  it('replaces spaces with dashes', () => {
+    expect(slugifyBranch('detection issues 13-07')).toBe(
+      'detection-issues-13-07',
+    );
+  });
+
+  it('leaves an already-valid branch name untouched', () => {
+    expect(slugifyBranch('feat/my-task')).toBe('feat/my-task');
+  });
+
+  it('preserves slashes for namespaced branches', () => {
+    expect(slugifyBranch('feature/some cool thing')).toBe(
+      'feature/some-cool-thing',
+    );
+  });
+
+  it('strips characters git forbids in ref names', () => {
+    expect(slugifyBranch('fix: bug ~^:?*[]\\ here')).toBe('fix-bug-here');
+  });
+
+  it('collapses repeated separators', () => {
+    expect(slugifyBranch('a   b---c///d')).toBe('a-b-c/d');
+  });
+
+  it('collapses ".." which git forbids', () => {
+    expect(slugifyBranch('foo..bar')).toBe('foo-bar');
+  });
+
+  it('trims separators git forbids at the edges', () => {
+    expect(slugifyBranch('  /.-foo bar-./  ')).toBe('foo-bar');
+  });
+
+  it('returns an empty string when nothing usable remains', () => {
+    expect(slugifyBranch('  ~^:  ')).toBe('');
+  });
+
+  it('produces a name accepted by git check-ref-format', () => {
+    const slug = slugifyBranch('detection issues 13-07');
+    // Throws (non-zero exit) if the name is invalid.
+    execSync(`git check-ref-format "refs/heads/${slug}"`);
+    expect(slug).toBe('detection-issues-13-07');
   });
 });
 
