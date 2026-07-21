@@ -267,6 +267,10 @@ global (all registered repos) so no scoping is reintroduced.
 
 `resolveWorktreePath(repoRoot, worktreePath, branch)` places worktrees as siblings to the repo directory: `<parent>/<repo-name>-<branch-name>`. Slashes in branch names are replaced with dashes to prevent path traversal.
 
+### Branch name slugification
+
+`prepareWorktree` runs every resolved branch name (whether from `branchInput`, the TUI wizard, or the `[branch]` CLI arg) through `slugifyBranch` (`lib/git.ts`) before it touches git, so free-form input like `detection issues 13-07` no longer makes `git worktree add -b` fail with `fatal: … is not a valid branch name`. `slugifyBranch` is a **minimal repair**, not the aggressive normaliser the spawner uses (`spawner/lib/branch.ts` `slugify`, which lowercases, drops non-ascii, and strips slashes for machine-generated names): it only replaces runs of whitespace + the characters git forbids in a ref (`~ ^ : ? * [ ] \ ..` `@{`, control chars) with a single dash, collapses repeats, and trims the separators git forbids at the edges. It **preserves slashes and case** so an already-valid name like `feat/My-Task` is returned unchanged (idempotent). When the slug differs from the input, `prepareWorktree` reports the name the user actually got; when nothing usable remains (e.g. `~^:`) it reports `not a usable branch name` and returns `null` without creating anything.
+
 ## Testing Conventions
 
 - Tests live alongside source files as `*.test.ts`.

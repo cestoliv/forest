@@ -503,3 +503,59 @@ describe('createWorktree (repo picker)', () => {
     }
   });
 });
+
+describe('createWorktree (branch slugify)', () => {
+  const configureEcho = () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        setup_commands: [],
+        ide: 'echo',
+        ide_open_args: [],
+      },
+      store,
+    );
+    return store;
+  };
+
+  it('slugifies a free-form branch name so git worktree add succeeds', async () => {
+    const store = configureEcho();
+    const reported: string[] = [];
+
+    // Raw "detection issues 13-07" would make `git worktree add -b` fail.
+    await createWorktree('detection issues 13-07', {
+      repoRoot: repoDir,
+      store,
+      report: (m) => reported.push(m),
+    });
+
+    expect(
+      existsSync(path.join(tmpDir, 'my-repo-detection-issues-13-07')),
+    ).toBe(true);
+    // The branch actually created is the slug.
+    const branches = execSync('git branch --format="%(refname:short)"', {
+      cwd: repoDir,
+      encoding: 'utf8',
+    });
+    expect(branches).toContain('detection-issues-13-07');
+    // The user is told which name they got.
+    expect(reported.join(' ')).toContain('detection-issues-13-07');
+  });
+
+  it('returns without creating anything when the name has no usable characters', async () => {
+    const store = configureEcho();
+    const reported: string[] = [];
+
+    await createWorktree('~^:', {
+      repoRoot: repoDir,
+      store,
+      report: (m) => reported.push(m),
+    });
+
+    // Nothing created, and the user is told why.
+    expect(existsSync(path.join(tmpDir, 'my-repo-'))).toBe(false);
+    expect(reported.join(' ')).toContain('not a usable branch name');
+  });
+});

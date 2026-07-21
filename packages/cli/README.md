@@ -145,7 +145,12 @@ wt create feat/login --ide orca   # Open the new worktree in Orca instead of Zed
 ```
 
 Creates a worktree as a sibling directory (`../my-project-feat-login`), runs your
-`setup_commands`, and opens it in your IDE. It **always** prompts you to pick the
+`setup_commands`, and opens it in your IDE. The branch name you type is
+**slugified** into a valid git branch name first — spaces and characters git
+forbids in a ref (e.g. `detection issues 13-07`) become dashes rather than
+failing with `fatal: … is not a valid branch name`. Already-valid names,
+including namespaced ones like `feat/login`, are left untouched; when the name
+changes you're told which branch you got. It **always** prompts you to pick the
 target repo from the registered repos (the current repo is auto-registered for
 discovery but never assumed) — so in a non-interactive shell it exits non-zero
 because the picker needs a TTY. Pass `--repo <path>` to name the target repo

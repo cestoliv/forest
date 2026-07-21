@@ -518,6 +518,34 @@ export function remoteExists(repoRoot: string, remote = 'origin'): boolean {
   }
 }
 
+/**
+ * Turn arbitrary user input into a valid git branch name. Git rejects names
+ * containing spaces or several special characters (see
+ * `git help check-ref-format`), which makes `git worktree add -b` fail. Rather
+ * than error out on the user, we slugify: runs of whitespace and disallowed
+ * characters become a single dash, repeats collapse, and the separators git
+ * forbids at the edges are trimmed. Slashes are preserved so namespaced
+ * branches like `feat/foo` survive. Returns an empty string if nothing usable
+ * remains, so callers can reject empty input.
+ */
+export function slugifyBranch(input: string): string {
+  return (
+    input
+      .trim()
+      // Control chars, whitespace, and the characters git forbids anywhere in a
+      // ref name: ~ ^ : ? * [ ] \ and the "@{" sequence.
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control chars is the point
+      .replace(/[\s~^:?*[\]\\\x00-\x1f\x7f]+|@\{/g, '-')
+      // ".." is forbidden; a lone "." between separators is noise.
+      .replace(/\.{2,}/g, '-')
+      // Collapse repeated separators.
+      .replace(/-{2,}/g, '-')
+      .replace(/\/{2,}/g, '/')
+      // Git forbids a ref that begins/ends with "/" or ".", or ends with "-".
+      .replace(/^[-/.]+|[-/.]+$/g, '')
+  );
+}
+
 export function resolveWorktreePath(
   repoRoot: string,
   worktreePath: string,

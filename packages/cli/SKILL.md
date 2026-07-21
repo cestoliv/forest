@@ -48,6 +48,8 @@ Pass `--repo <path>` to target a repo explicitly and skip the picker. The path i
 
 Pass `--ide <ide>` (`zed` or `orca`) to override the configured `ide` for this run (precedence: `--ide` → `config.ide` → the default `zed`). `--ide orca` opens the worktree in Orca — it registers the repo (`orca repo add`) and opens a terminal on the worktree (`orca terminal create`) instead of spawning an editor.
 
+The branch name (typed at the prompt or passed as `[branch]`) is slugified into a valid git branch name first: spaces and characters git forbids in a ref become dashes, so free-form input like `detection issues 13-07` works instead of failing with `fatal: … is not a valid branch name`. Already-valid names (including namespaced ones like `feat/login`) are unchanged; you're told the final name when it differs.
+
 The worktree is created as a sibling directory to the repo: `<parent>/<repo-name>-<branch-name>`.
 
 After creation, `wt` runs any configured `setup_commands` and opens the worktree in your IDE.
