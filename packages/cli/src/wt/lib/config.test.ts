@@ -121,6 +121,20 @@ describe('getEffectiveConfig', () => {
   });
 });
 
+describe('agent_model', () => {
+  it('agent_model defaults to empty and is per-repo overridable', () => {
+    const store = createStore(tmpDir);
+    expect(getEffectiveConfig('/some/repo', store).agent_model).toBe('');
+
+    setGlobalConfig(
+      { repo_overrides: { '/some/repo': { agent_model: 'fable' } } },
+      store,
+    );
+    expect(getEffectiveConfig('/some/repo', store).agent_model).toBe('fable');
+    expect(getEffectiveConfig('/other/repo', store).agent_model).toBe('');
+  });
+});
+
 describe('getConfigFilePath', () => {
   it('returns a path ending with config.json', () => {
     const p = getConfigFilePath();

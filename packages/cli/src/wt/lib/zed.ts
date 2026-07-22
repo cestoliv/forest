@@ -59,10 +59,11 @@ export interface CreatedArtifacts {
  *
  * The command string is built by the shared `buildAgentCommandLine` (see
  * `orca.ts`) so the Zed and Orca paths stay byte-for-byte identical: it injects
- * `--permission-mode <mode>` (removing any existing one to avoid duplicates)
- * and appends the single-quoted prompt unless `appendPrompt` is false (the
- * caller already placed it via a `{{prompt}}` template — appending would emit it
- * twice).
+ * `--permission-mode <mode>` (removing any existing one to avoid duplicates),
+ * injects `--model <model>` (same dedup treatment) when a non-empty `model` is
+ * given, and appends the single-quoted prompt unless `appendPrompt` is false
+ * (the caller already placed it via a `{{prompt}}` template — appending would
+ * emit it twice).
  */
 export function buildAgentTask(
   agentCommand: string,
@@ -70,12 +71,14 @@ export function buildAgentTask(
   label: string,
   mode?: string,
   appendPrompt = true,
+  model?: string,
 ): ZedTask {
   const command = buildAgentCommandLine(
     agentCommand,
     prompt,
     mode,
     appendPrompt,
+    model,
   );
   return {
     label,

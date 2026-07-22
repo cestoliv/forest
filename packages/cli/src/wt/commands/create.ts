@@ -44,6 +44,8 @@ export interface CreateOptions {
     opts: { allowAgent: boolean },
   ) => Promise<ExistingWorktreeAction>;
   mode?: string;
+  /** Model to run the agent on (e.g. `fable`, `opus`); overrides `agent_model`. */
+  model?: string;
   /**
    * IDE to open the worktree in (e.g. `zed`, `orca`); overrides the configured
    * `ide`. Precedence: this flag → `config.ide` → the built-in default `zed`.

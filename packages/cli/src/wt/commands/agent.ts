@@ -117,6 +117,10 @@ export async function createAgentWorktree(
     mode = 'default';
   }
 
+  // Resolve the model: --model flag → configured agent_model → unset ('').
+  // No validation (open string); empty means "don't inject --model".
+  const model = options.model ?? config.agent_model ?? '';
+
   if (status === 'exists') {
     const prompt = options.existingWorktreePrompt ?? promptExistingWorktree;
     const action = await prompt(worktreePath, { allowAgent: true });
@@ -131,6 +135,7 @@ export async function createAgentWorktree(
     worktreePath,
     planPrompt,
     mode,
+    model,
     resolvedBranch,
     repoRoot,
     report,
@@ -155,6 +160,7 @@ async function startAgentInWorktree(
   worktreePath: string,
   planPrompt: string,
   mode: string,
+  model: string,
   branch: string,
   repoRoot: string,
   report: (msg: string) => void,
@@ -168,6 +174,7 @@ async function startAgentInWorktree(
       worktreePath,
       planPrompt,
       mode,
+      model,
       branch,
       repoRoot,
       report,
@@ -209,6 +216,7 @@ async function startAgentInWorktree(
     AGENT_TASK_LABEL,
     mode,
     appendPrompt,
+    model,
   );
   const created = writeAgentTask(worktreePath, task);
   const keymapOk = ensureKeymap(config.agent_trigger_chord, AGENT_TASK_LABEL);
@@ -295,6 +303,7 @@ async function startAgentInOrcaWorktree(
   worktreePath: string,
   planPrompt: string,
   mode: string,
+  model: string,
   branch: string,
   repoRoot: string,
   report: (msg: string) => void,
@@ -319,6 +328,7 @@ async function startAgentInOrcaWorktree(
     planPrompt,
     mode,
     appendPrompt,
+    model,
   );
 
   report(pc.dim('Starting agent in Orca…'));

@@ -329,6 +329,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       expect.anything(),
       'default',
       true,
+      '',
     );
   });
 
@@ -340,6 +341,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       expect.anything(),
       'plan',
       true,
+      '',
     );
   });
 
@@ -351,6 +353,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       expect.anything(),
       'auto',
       true,
+      '',
     );
   });
 
@@ -366,6 +369,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       expect.anything(),
       'default',
       true,
+      '',
     );
   });
 
@@ -377,6 +381,7 @@ describe('createAgentWorktree (mode resolution)', () => {
       expect.anything(),
       'default',
       true,
+      '',
     );
   });
 
@@ -390,6 +395,77 @@ describe('createAgentWorktree (mode resolution)', () => {
       }),
     ).rejects.toThrow(/Invalid mode/);
     expect(writeAgentTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAgentWorktree (model resolution)', () => {
+  const runAgent = async (
+    store: ReturnType<typeof configure>,
+    model?: string,
+  ) => {
+    vi.useFakeTimers();
+    const promise = createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      ...(model !== undefined ? { model } : {}),
+    });
+    await vi.runAllTimersAsync();
+    await promise;
+  };
+
+  it('injects no --model when neither --model nor agent_model is set', async () => {
+    await runAgent(configure());
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+      true,
+      '',
+    );
+    const command = vi.mocked(buildAgentTask).mock.results[0].value.command;
+    expect(command).not.toContain('--model');
+  });
+
+  it('falls back to the configured agent_model when --model is omitted', async () => {
+    await runAgent(configure({ agent_model: 'opus' }));
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+      true,
+      'opus',
+    );
+    const command = vi.mocked(buildAgentTask).mock.results[0].value.command;
+    expect(command).toContain('--model opus');
+  });
+
+  it('lets an explicit --model override the configured agent_model', async () => {
+    await runAgent(configure({ agent_model: 'opus' }), 'fable');
+    expect(buildAgentTask).toHaveBeenCalledWith(
+      expect.anything(),
+      'do stuff',
+      expect.anything(),
+      'default',
+      true,
+      'fable',
+    );
+    const command = vi.mocked(buildAgentTask).mock.results[0].value.command;
+    expect(command).toContain('--model fable');
+    expect(command).not.toContain('--model opus');
+  });
+
+  it('reaches the built command line when --model is passed with no configured agent_model', async () => {
+    await runAgent(configure(), 'fable');
+    const command = vi.mocked(buildAgentTask).mock.results[0].value.command;
+    expect(command).toContain('--model fable');
+  });
+
+  it('injects no --model when both --model and agent_model resolve empty', async () => {
+    await runAgent(configure({ agent_model: '' }));
+    const command = vi.mocked(buildAgentTask).mock.results[0].value.command;
+    expect(command).not.toContain('--model');
   });
 });
 
@@ -506,6 +582,23 @@ describe('createAgentWorktree (ide selection)', () => {
     );
     expect(writeAgentTask).not.toHaveBeenCalled();
     expect(triggerChord).not.toHaveBeenCalled();
+  });
+
+  it('threads --model into the Orca command line', async () => {
+    const store = configure({ ide: 'orca' });
+
+    await createAgentWorktree('feature', 'do stuff', {
+      repoRoot: repoDir,
+      store,
+      model: 'fable',
+    });
+
+    expect(startAgentInOrca).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandLine:
+          "claude --permission-mode default --model fable 'do stuff'",
+      }),
+    );
   });
 
   it('--ide orca overrides a configured zed', async () => {

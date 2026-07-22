@@ -16,14 +16,17 @@ import * as clack from '@clack/prompts';
 
 /**
  * Build the agent command line `<agentCommand> '<prompt>'`, injecting
- * `--permission-mode <mode>` and single-quoting the prompt. This is the single
- * source of truth for that string: the Zed path wraps it in a `.zed/tasks.json`
- * task (see `buildAgentTask`), the Orca path passes it to `orca terminal create
- * --command`.
+ * `--permission-mode <mode>` and `--model <model>` and single-quoting the prompt.
+ * This is the single source of truth for that string: the Zed path wraps it in
+ * a `.zed/tasks.json` task (see `buildAgentTask`), the Orca path passes it to
+ * `orca terminal create --command`.
  *
  * When a mode is provided, `--permission-mode <mode>` is injected, removing any
  * existing `--permission-mode` flag from `agentCommand` first to avoid
  * duplicates.
+ *
+ * When a model is provided (non-empty string), `--model <model>` is injected,
+ * removing any existing `--model` flag first to avoid duplicates.
  *
  * When `appendPrompt` is false, the prompt is NOT appended/quoted — the caller
  * has already placed it inside `agentCommand` (e.g. via a `{{prompt}}`
@@ -34,17 +37,28 @@ export function buildAgentCommandLine(
   prompt: string,
   mode?: string,
   appendPrompt = true,
+  model?: string,
 ): string {
   let finalCommand = agentCommand;
 
   // Only modify the command if a mode is explicitly provided.
   if (mode) {
     // Remove any existing --permission-mode flag to avoid duplicates.
-    const baseCommand = agentCommand
+    const baseCommand = finalCommand
       .replace(/--permission-mode\s+\S+/g, '')
       .replace(/\s+/g, ' ')
       .trim();
     finalCommand = `${baseCommand} --permission-mode ${mode}`.trim();
+  }
+
+  // Only modify the command if a model is explicitly provided (non-empty).
+  if (model) {
+    // Remove any existing --model flag to avoid duplicates.
+    const baseCommand = finalCommand
+      .replace(/--model\s+\S+/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    finalCommand = `${baseCommand} --model ${model}`.trim();
   }
 
   return appendPrompt

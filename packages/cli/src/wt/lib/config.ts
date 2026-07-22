@@ -13,6 +13,7 @@ export interface RepoConfig {
   agent_command: string;
   agent_trigger_chord: string;
   agent_mode: string;
+  agent_model: string;
 }
 
 export interface WtConfig extends RepoConfig {
@@ -33,6 +34,7 @@ export const DEFAULT_CONFIG: WtConfig = {
   agent_trigger_chord: 'ctrl-shift-cmd-c',
   auto_refresh_minutes: 5,
   agent_mode: 'default',
+  agent_model: '',
   repos: [],
   repo_overrides: {},
 };
