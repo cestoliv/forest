@@ -235,8 +235,15 @@ export async function deleteWorktree(
   item: Worktree,
   store: ConfigStore,
 ): Promise<boolean> {
+  // Prune runs globally across every registered repo, so the same branch name
+  // can appear in multiple projects (e.g. a `back` and a `front` repo sharing a
+  // feature branch). Prefix the branch with the project (repo dir basename, the
+  // same value as the `{{project}}` template var) so each confirmation is
+  // unambiguous about which worktree it's about to remove.
+  const name = `${path.basename(item.repoRoot)}/${item.branch}`;
+
   const confirmed = await clack.confirm({
-    message: `Remove worktree ${pc.bold(item.branch)}? This cannot be undone.`,
+    message: `Remove worktree ${pc.bold(name)}? This cannot be undone.`,
   });
   if (clack.isCancel(confirmed) || !confirmed) return false;
 
@@ -247,7 +254,7 @@ export async function deleteWorktree(
   // next render. Each entry point prints it once at the end via
   // `warnIfCwdRemoved` instead.
   const reportRemoved = (label: string): true => {
-    console.log(pc.green(`${label} ${item.branch}`));
+    console.log(pc.green(`${label} ${name}`));
     return true;
   };
 
@@ -283,7 +290,7 @@ export async function deleteWorktree(
         `Teardown command failed: ${result.failedCommand} (exit code ${result.exitCode})`,
       );
       const proceed = await clack.confirm({
-        message: `Delete ${pc.bold(item.branch)} anyway?`,
+        message: `Delete ${pc.bold(name)} anyway?`,
       });
       if (clack.isCancel(proceed) || !proceed) return false;
     }
@@ -299,14 +306,16 @@ export async function deleteWorktree(
         'Worktree contains git submodules, which prevent standard removal.',
       );
       const force = await clack.confirm({
-        message: `Force delete ${pc.bold(item.branch)}? The worktree directory will be removed directly.`,
+        message: `Force delete ${pc.bold(name)}? The worktree directory will be removed directly.`,
       });
       if (clack.isCancel(force) || !force) return false;
       try {
         removeWorktree(item.repoRoot, item.path, true);
         return reportRemoved('✓ Force-removed');
       } catch (err2) {
-        console.error(pc.red(`✗ Failed to force-remove: ${String(err2)}`));
+        console.error(
+          pc.red(`✗ Failed to force-remove ${name}: ${String(err2)}`),
+        );
         return false;
       }
     }
@@ -318,18 +327,20 @@ export async function deleteWorktree(
         );
       }
       const force = await clack.confirm({
-        message: `Force delete ${pc.bold(item.branch)}? All changes will be lost.`,
+        message: `Force delete ${pc.bold(name)}? All changes will be lost.`,
       });
       if (clack.isCancel(force) || !force) return false;
       try {
         removeWorktree(item.repoRoot, item.path, true);
         return reportRemoved('✓ Force-removed');
       } catch (err2) {
-        console.error(pc.red(`✗ Failed to force-remove: ${String(err2)}`));
+        console.error(
+          pc.red(`✗ Failed to force-remove ${name}: ${String(err2)}`),
+        );
         return false;
       }
     }
-    console.error(pc.red(`✗ Failed to remove: ${msg}`));
+    console.error(pc.red(`✗ Failed to remove ${name}: ${msg}`));
     return false;
   }
 }
