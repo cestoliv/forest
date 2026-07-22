@@ -58,6 +58,37 @@ describe('buildAgentCommandLine', () => {
       'claude -p already --permission-mode plan',
     );
   });
+
+  it('injects --model when a model is provided', () => {
+    expect(
+      buildAgentCommandLine('claude', 'hi', undefined, true, 'fable'),
+    ).toBe("claude --model fable 'hi'");
+  });
+
+  it('omits --model when model is empty or undefined', () => {
+    expect(buildAgentCommandLine('claude', 'hi', undefined, true, '')).toBe(
+      "claude 'hi'",
+    );
+    expect(buildAgentCommandLine('claude', 'hi')).toBe("claude 'hi'");
+  });
+
+  it('de-duplicates an existing --model flag', () => {
+    expect(
+      buildAgentCommandLine(
+        'claude --model opus',
+        'hi',
+        undefined,
+        true,
+        'fable',
+      ),
+    ).toBe("claude --model fable 'hi'");
+  });
+
+  it('injects --permission-mode and --model together', () => {
+    expect(buildAgentCommandLine('claude', 'hi', 'auto', true, 'fable')).toBe(
+      "claude --permission-mode auto --model fable 'hi'",
+    );
+  });
 });
 
 describe('buildOrcaCommands', () => {

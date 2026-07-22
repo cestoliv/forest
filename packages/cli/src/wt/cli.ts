@@ -41,6 +41,10 @@ program
     '--mode <mode>',
     'Claude Code permission mode (default, plan, auto, etc.); overrides the configured agent_mode',
   )
+  .option(
+    '--model <model>',
+    'Model to run the agent on (e.g. fable, opus); overrides the configured agent_model',
+  )
   .option('--repo <path>', 'Target repository path; skips the repo picker')
   .option(
     '--ide <ide>',
@@ -50,11 +54,12 @@ program
     async (
       branch: string,
       planPrompt: string,
-      options: { mode?: string; repo?: string; ide?: string },
+      options: { mode?: string; model?: string; repo?: string; ide?: string },
     ) => {
       const { createAgentWorktree } = await import('./commands/agent.js');
       await createAgentWorktree(branch, planPrompt, {
         mode: options.mode,
+        model: options.model,
         repoRoot: options.repo,
         ide: options.ide,
         // Interactive CLI run: reveal the agent's terminal (Orca --focus).

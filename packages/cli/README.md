@@ -43,18 +43,20 @@ wt                                        # Browse worktrees (interactive TUI)
 wt create my-feat                         # New worktree, opens your IDE
 wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macOS)
 wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of the default
+wt agent big-job "Plan it" --model fable  # Bigger model for one run
 wt prune                                  # Remove merged worktrees (per-branch confirm)
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
 ```
 
-## `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>] [--ide <ide>]` — the standout
+## `wt agent <branch> <plan_prompt> [--mode <mode>] [--model <model>] [--repo <path>] [--ide <ide>]` — the standout
 
 ```bash
 wt agent feat/login "Read the codebase, then propose a plan for login."
 wt agent fix-bug "Fix the auth bug" --mode auto
 wt agent refactor "Refactor API layer" --mode default
 wt agent feat/login "Plan login" --ide orca   # start the agent in Orca instead of Zed
+wt agent big-refactor "Plan the refactor" --model fable   # use a bigger model for one run
 ```
 
 Creates a worktree exactly like `wt create`, then auto-starts your agent
@@ -82,6 +84,10 @@ the `agent_mode` config key):
 - `auto` — Claude's safety model makes decisions instead of prompting
 - `dontAsk` — Minimal interruptions in trusted environments
 - `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
+
+**Model.** `--model` overrides the `agent_model` config key (default unset →
+Claude Code's own default); any model string is accepted (e.g. `fable`,
+`opus`), no validation.
 
 Under the hood it writes a temporary `.zed/tasks.json`, installs a global Zed
 keymap chord, opens Zed and fires the chord via `osascript`, then removes the
@@ -263,6 +269,7 @@ Edit with `wt config` (`wt config --path` prints the file location —
 | `teardown_commands`   | `[]`                              | Commands to run in a worktree just before it is deleted (e.g. `["docker compose down -v"]`; supports [`{{…}}` templating](#command-templating)) |
 | `agent_command`       | `"claude"`                        | Base command; `--permission-mode <mode>` injected. Prompt is substituted at `{{prompt}}` if present, else appended (supports [`{{…}}` templating](#command-templating)) |
 | `agent_mode`          | `"default"`                       | Default permission mode for `wt agent` (overridden by `--mode`)                     |
+| `agent_model`         | `""`                              | Model passed to the agent as `--model`; empty = not passed (Claude Code default)     |
 | `agent_trigger_chord` | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs and presses                                    |
 | `auto_refresh_minutes`| `5`                               | How often the interactive list re-fetches worktrees (shows a "last refreshed" header); `0` disables it. **Global only** — not per-repo overridable |
 | `repo_overrides`      | `{}`                              | Per-repo overrides for the keys above (except the global-only `auto_refresh_minutes`) |

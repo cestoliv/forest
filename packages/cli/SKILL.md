@@ -58,7 +58,7 @@ If the worktree path already exists, `wt create` doesn't error — it prompts yo
 to **open it in the IDE** or **quit**. (In a non-interactive shell it errors
 with a non-zero exit instead of prompting.)
 
-### `wt agent <branch> <plan_prompt> [--mode <mode>] [--repo <path>] [--ide <ide>]`
+### `wt agent <branch> <plan_prompt> [--mode <mode>] [--model <model>] [--repo <path>] [--ide <ide>]`
 
 Create a worktree (same as `wt create`) **and** auto-start an AI agent in Zed's
 integrated terminal (or an Orca terminal — see `--ide` below), pre-filled with
@@ -70,6 +70,7 @@ wt agent feature/fix 'Fix the bug in payment processing' --mode auto
 wt agent refactor/api 'Refactor the API layer' --mode default
 wt agent feature/login 'Plan login' --repo ~/dev/my-project   # skip the picker
 wt agent feature/login 'Plan login' --ide orca                # start in Orca, not Zed
+wt agent big-refactor 'Plan the refactor' --model fable        # use a bigger model for one run
 ```
 
 Like `wt create`, it always prompts for the target repo unless `--repo <path>`
@@ -86,11 +87,18 @@ change the default with the `agent_mode` config key):
 - `dontAsk` — Minimal interruptions in trusted environments
 - `bypassPermissions` — Skip all permission checks (dangerous, CI/sandbox only)
 
+The `--model` flag sets the model Claude Code runs the agent on (e.g. `fable`,
+`opus`; overrides the `agent_model` config key, default `""` unset — no
+validation, any string is accepted). When omitted (and `agent_model` unset), no
+`--model` is passed and Claude Code uses its own default.
+
 The launch target is the `ide` config key (default `zed`), overridable per run
 with `--ide zed|orca` (precedence: `--ide` → `config.ide` → `zed`).
 
 **Zed (`ide: zed`).** It writes a temporary `.zed/tasks.json` running
-`<agent_command> --permission-mode <mode> '<plan_prompt>'`, ensures a global Zed keymap chord
+`<agent_command> --permission-mode <mode> --model <model> '<plan_prompt>'`
+(`--model <model>` is only injected when a model is set, via `--model` or
+`agent_model`), ensures a global Zed keymap chord
 (`agent_trigger_chord`) spawns that task, opens Zed, presses the chord via
 `osascript`, then removes the temporary task so the repo is left clean.
 
@@ -102,7 +110,7 @@ for you to grant it and confirm, then retries automatically.
 **Orca (`ide: orca`).** Instead of the Zed automation, it registers the repo
 (`orca repo add --path <repoRoot>`) and starts the agent in a terminal attached
 to the worktree (`orca terminal create --worktree path:<worktree> --command
-'<agent_command> --permission-mode <mode> '\''<plan_prompt>'\'''`) — the exact
+'<agent_command> --permission-mode <mode> --model <model> '\''<plan_prompt>'\'''`) — the exact
 same command string the Zed path builds. No keymap or Accessibility needed. A
 launch counts as started only when `orca terminal create` exits 0 **and** its
 JSON reports `ok: true`. If Orca's runtime is not running it launches it (`orca
@@ -222,6 +230,7 @@ Config is stored as JSON. Get the path with `wt config --path`.
 | `ide_open_args`       | `string[]` | `["-n"]`                          | Arguments passed to the IDE command (ignored for `ide: orca`, which uses the Orca CLI)                                                                                     |
 | `agent_command`       | `string`   | `"claude"`                        | Base command `wt agent` runs in Zed; `--permission-mode <mode>` is injected (any existing one replaced). Supports `{{…}}` templating, including `{{prompt}}`: if present, the plan prompt is substituted there; if absent, `<plan_prompt>` is appended single-quoted |
 | `agent_mode`          | `string`   | `"default"`                       | Default Claude Code permission mode for `wt agent`; the `--mode` flag overrides it. One of `default`, `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`        |
+| `agent_model`         | `string`   | `""`                              | Model passed to the agent as `--model`; empty = not passed (Claude Code default)                                                                                          |
 | `agent_trigger_chord` | `string`   | `"ctrl-shift-cmd-c"`              | Zed keymap chord `wt agent` installs/presses to spawn the agent task                                                                                                      |
 | `auto_refresh_minutes`| `number`   | `5`                               | How often the interactive list (`wt`) re-fetches worktrees and updates the "last refreshed" header; `0` disables auto-refresh. **Global only** — not per-repo overridable |
 | `repos`               | `string[]` | `[]`                              | Registered repo paths (auto-populated on first use)                                                                                                                       |
@@ -229,7 +238,7 @@ Config is stored as JSON. Get the path with `wt config --path`.
 
 ### Per-repo overrides
 
-Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_mode`, `agent_trigger_chord`) for a specific repo. `auto_refresh_minutes` is global-only and cannot be overridden per repo:
+Override any field (`worktree_path`, `base_branch`, `setup_commands`, `teardown_commands`, `ide`, `ide_open_args`, `agent_command`, `agent_mode`, `agent_model`, `agent_trigger_chord`) for a specific repo. `auto_refresh_minutes` is global-only and cannot be overridden per repo:
 
 ```json
 {

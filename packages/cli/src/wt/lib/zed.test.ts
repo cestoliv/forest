@@ -136,6 +136,20 @@ describe('buildAgentTask', () => {
     );
     expect(task.command).toBe('claude -p already-here --permission-mode auto');
   });
+
+  it('forwards model into the command line', () => {
+    const task = buildAgentTask(
+      'claude',
+      'hi',
+      'wt-agent',
+      'auto',
+      true,
+      'fable',
+    );
+    expect(task.command).toBe(
+      "claude --permission-mode auto --model fable 'hi'",
+    );
+  });
 });
 
 describe('upsertTask / removeTask', () => {

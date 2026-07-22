@@ -256,6 +256,10 @@ describe('removeWorktree', () => {
     expect(existsSync(wtPath)).toBe(true);
   });
 
+  // Runs several real git submodule operations (init/commit/add/update), which
+  // are slower than the average test here; under load (e.g. the full serial
+  // suite) they can occasionally exceed the default 5s timeout even though
+  // nothing is actually hung — give it more headroom.
   it('force-removes a worktree containing submodules', () => {
     const subDir = path.join(tmpDir, 'sub-repo');
     execSync(`mkdir -p ${subDir}`);
@@ -285,7 +289,7 @@ describe('removeWorktree', () => {
     expect(existsSync(wtPath)).toBe(false);
     const worktrees = listWorktrees(repoDir, repoDir);
     expect(worktrees.find((w) => w.branch === 'with-sub')).toBeUndefined();
-  });
+  }, 15000);
 });
 
 describe('listWorktreeDirtyFiles', () => {
