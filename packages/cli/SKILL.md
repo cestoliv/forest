@@ -180,7 +180,10 @@ first so the network is often not touched at all.
    branch is still *ahead* of base, so neither offline signal fires.
 4. **Closed-unmerged PR/MR** on the forge — the branch is dead (the fix landed
    another way). Like (3) it does no git ancestry checks, so it too can prune a
-   branch ahead of base.
+   branch ahead of base. It requires that **no** PR/MR from the same branch is
+   still open: closing a PR and opening a fresh one from the same branch is
+   routine, and the superseded PR must not read as a death notice for a branch
+   that is still in review.
 
 (3) and (4) only count a PR/MR whose target branch is the configured
 `base_branch`, so a branch merged into `develop` is not prunable against `main`.
