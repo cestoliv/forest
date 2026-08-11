@@ -102,7 +102,10 @@ describe('buildMergedQuery', () => {
 });
 
 describe('buildClosedQuery', () => {
-  it('builds a gh query filtered to closed PRs for the head and base branches', () => {
+  it('builds a gh query over every state for the head and base branches', () => {
+    // Deliberately `--state all`, not `--state closed`: deciding "this branch is
+    // dead" needs to see a *still-open* PR on the same head/base too, and one
+    // query keeps both facts consistent (see `parseClosedResult`).
     expect(buildClosedQuery('gh', 'feat/x', 'main')).toEqual([
       'pr',
       'list',
@@ -111,17 +114,17 @@ describe('buildClosedQuery', () => {
       '--base',
       'main',
       '--state',
-      'closed',
+      'all',
       '--json',
       'state',
     ]);
   });
 
-  it('builds a glab query filtered to closed MRs for the source and target branches', () => {
+  it('builds a glab query over every state for the source and target branches', () => {
     expect(buildClosedQuery('glab', 'feat/x', 'main')).toEqual([
       'mr',
       'list',
-      '--closed',
+      '--all',
       '--source-branch',
       'feat/x',
       '--target-branch',
@@ -155,6 +158,33 @@ describe('parseClosedResult', () => {
     expect(parseClosedResult('[{"state":"MERGED"},{"state":"CLOSED"}]')).toBe(
       true,
     );
+  });
+
+  it('is false when a still-open PR accompanies the closed one (gh OPEN)', () => {
+    // The reopen/supersede workflow: PR #1 closed, PR #2 opened from the same
+    // branch. The branch is alive — the closed PR is stale, not a death notice.
+    expect(parseClosedResult('[{"state":"OPEN"},{"state":"CLOSED"}]')).toBe(
+      false,
+    );
+  });
+
+  it('is false when a still-open MR accompanies the closed one (glab opened)', () => {
+    expect(parseClosedResult('[{"state":"opened"},{"state":"closed"}]')).toBe(
+      false,
+    );
+  });
+
+  it('is false when an open PR accompanies a merged and a closed one', () => {
+    expect(
+      parseClosedResult(
+        '[{"state":"OPEN"},{"state":"MERGED"},{"state":"CLOSED"}]',
+      ),
+    ).toBe(false);
+  });
+
+  it('is false for an open PR alone', () => {
+    expect(parseClosedResult('[{"state":"OPEN"}]')).toBe(false);
+    expect(parseClosedResult('[{"state":"opened"}]')).toBe(false);
   });
 
   it('is false for an empty array', () => {
@@ -299,7 +329,7 @@ describe('hasClosedPullRequest', () => {
     ).toBe(true);
   });
 
-  it('returns false when the forge reports only a merged PR (gh --state closed)', () => {
+  it('returns false when the forge reports only a merged PR (gh --state all)', () => {
     expect(
       hasClosedPullRequest(
         '/repo',
@@ -307,6 +337,23 @@ describe('hasClosedPullRequest', () => {
         'main',
         'origin',
         runner('git@github.com:o/r.git', '[{"state":"MERGED"}]'),
+      ),
+    ).toBe(false);
+  });
+
+  it('returns false when a closed PR is superseded by an open one on the same head', () => {
+    // Regression: a stale closed PR must not read as "branch is dead" while a
+    // newer PR from the same branch is still open.
+    expect(
+      hasClosedPullRequest(
+        '/repo',
+        'feat/x',
+        'main',
+        'origin',
+        runner(
+          'git@github.com:o/r.git',
+          '[{"state":"OPEN"},{"state":"CLOSED"}]',
+        ),
       ),
     ).toBe(false);
   });

@@ -221,9 +221,12 @@ run first, so most branches are decided without touching the network:
   squash the forge **rebased onto a newer base**: the resulting commit has a
   different patch than yours and your branch is still *ahead* of base, so no
   amount of local git can see the merge.
-- **A PR/MR closed without merging** — the fix landed another way, so the branch
-  is dead. Like the previous signal it does no git ancestry checks, so it too
-  can prune a branch that is *ahead* of base.
+- **A PR/MR closed without merging, with none still open on that branch** — the
+  fix landed another way, so the branch is dead. Like the previous signal it
+  does no git ancestry checks, so it too can prune a branch that is *ahead* of
+  base. The "none still open" part matters: closing a PR and opening a fresh one
+  from the same branch is routine, and the superseded PR must not read as a
+  death notice for work that is still in review.
 
 Both forge lookups only count a PR/MR whose target is your configured
 `base_branch`, so a branch merged into `develop` is never reported prunable

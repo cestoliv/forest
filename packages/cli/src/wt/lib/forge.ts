@@ -102,12 +102,19 @@ export function parseMergedResult(stdout: string): boolean {
   }
 }
 
-/** argv for listing *closed-unmerged* PRs/MRs whose source/head branch is
- * `branch` and whose target branch is `baseBranch` (see `buildMergedQuery` for
- * why the target filter is required). Note: `gh pr list --state closed` returns
- * *both* closed-unmerged and merged PRs (gh models merged as a kind of closed),
- * so we request the `state` field and let `parseClosedResult` filter merged ones
- * out. `glab mr list --closed` already excludes merged MRs. */
+/**
+ * argv for listing *every* PR/MR whose source/head branch is `branch` and whose
+ * target branch is `baseBranch` (see `buildMergedQuery` for why the target
+ * filter is required).
+ *
+ * Deliberately unfiltered by state (`--state all` / `--all`) even though the
+ * caller only asks about closed ones: a closed PR only means "this branch is
+ * dead" if no PR from the same head is *still open*, so the decision needs both
+ * facts. Asking for them in one query (rather than a closed query plus an open
+ * one) keeps them consistent and keeps the failure mode simple — one call
+ * either answers or throws, so a half-answer can never read as "no open PR".
+ * `parseClosedResult` does the filtering.
+ */
 export function buildClosedQuery(
   tool: ForgeTool,
   branch: string,
@@ -122,7 +129,7 @@ export function buildClosedQuery(
       '--base',
       baseBranch,
       '--state',
-      'closed',
+      'all',
       '--json',
       'state',
     ];
@@ -130,7 +137,7 @@ export function buildClosedQuery(
   return [
     'mr',
     'list',
-    '--closed',
+    '--all',
     '--source-branch',
     branch,
     '--target-branch',
@@ -141,19 +148,29 @@ export function buildClosedQuery(
 }
 
 /**
- * Parse the CLI's JSON output → `true` when at least one *closed-unmerged*
- * PR/MR is present. `gh --state closed` includes merged PRs (with
- * `state: 'MERGED'`), so keep only entries whose `state` is `CLOSED`
- * (case-insensitive: gh emits `CLOSED`, glab emits `closed`; both drop
- * `MERGED`/`merged`). Any non-array / unparseable output → `false`.
+ * Parse the CLI's JSON output (every PR/MR for this head → base, see
+ * `buildClosedQuery`) → `true` only when the branch is genuinely dead: at least
+ * one *closed-unmerged* PR/MR **and** none still open.
+ *
+ * Two states must be filtered out, both case-insensitively (gh shouts,
+ * glab whispers):
+ * - `MERGED`/`merged` — merged is not closed-unmerged. gh in particular models
+ *   merged as a kind of closed, so it shows up here regardless.
+ * - `OPEN`/`opened` — an open PR vetoes the whole signal. Closing a PR and
+ *   opening a fresh one from the same branch is routine (a retarget, a botched
+ *   PR, a rewritten description), and the stale closed PR must not then read as
+ *   a death notice for a branch that is still in flight.
+ *
+ * Any non-array / unparseable output → `false`.
  */
 export function parseClosedResult(stdout: string): boolean {
   try {
     const data = JSON.parse(stdout);
-    return (
-      Array.isArray(data) &&
-      data.some((x) => String(x?.state).toUpperCase() === 'CLOSED')
-    );
+    if (!Array.isArray(data)) return false;
+    const states = data.map((x) => String(x?.state).toUpperCase());
+    // `OPENED` (glab) shares the `OPEN` (gh) prefix; no other state does.
+    if (states.some((s) => s.startsWith('OPEN'))) return false;
+    return states.includes('CLOSED');
   } catch {
     return false;
   }
@@ -218,14 +235,19 @@ export function hasMergedPullRequest(
 }
 
 /**
- * Whether `branch` has a *closed-unmerged* pull request / merge request
- * **targeting `baseBranch`** on the forge backing `remote` — i.e. its PR/MR was
- * closed without merging (the fix landed some other way, so the branch is dead).
- * Byte-for-byte parallel to `hasMergedPullRequest`, including the local-name
- * `baseBranch` target filter: resolves the remote URL → host → CLI, queries it,
- * and returns whether any closed-unmerged PR/MR exists. Fails closed (`false`)
- * on any error: missing CLI, offline, not authenticated, unparseable remote, or
- * no result.
+ * Whether `branch` is *dead* on the forge backing `remote`: it has a
+ * closed-unmerged pull request / merge request **targeting `baseBranch`** and
+ * no PR/MR from the same head is still open. Parallel to
+ * `hasMergedPullRequest`, including the local-name `baseBranch` target filter:
+ * resolves the remote URL → host → CLI, queries it, and lets
+ * `parseClosedResult` decide. Fails closed (`false`) on any error: missing CLI,
+ * offline, not authenticated, unparseable remote, or no result.
+ *
+ * The open-PR veto is what makes this a "dead branch" signal rather than a
+ * "has ever been closed" one: reopening work as a second PR from the same
+ * branch is routine, and the query is by branch *name*, so the superseded PR
+ * matches just as well as the live one. Without the veto `wt prune` offers a
+ * branch that is actively in review.
  *
  * Note this is orthogonal to git topology — a closed PR says nothing about
  * whether the branch is an ancestor of base, so callers must not gate this on
