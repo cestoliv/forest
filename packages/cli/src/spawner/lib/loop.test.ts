@@ -96,6 +96,97 @@ describe('runTick', () => {
     await runTick(deps);
     expect(spawnAgent).not.toHaveBeenCalled();
   });
+
+  describe('due date gating', () => {
+    it('skips a task due later, even when it is the oldest', async () => {
+      const tasks = [
+        makeTask({
+          id: 'later',
+          project_id: 'OVL',
+          added_at: '2025-01-01T00:00:00Z',
+          due: { date: '2099-01-01' },
+        }),
+        makeTask({
+          id: 'now',
+          project_id: 'OVL',
+          added_at: '2025-02-01T00:00:00Z',
+        }),
+      ];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const deps: TickDeps = {
+        api: api(tasks),
+        config,
+        spawnAgent,
+        log: () => {},
+      };
+      await runTick(deps);
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+      expect((spawnAgent.mock.calls[0] as unknown as string[])[0]).toContain(
+        '-now',
+      );
+    });
+
+    it('dispatches a task whose due date already passed', async () => {
+      const tasks = [
+        makeTask({
+          id: 'past',
+          project_id: 'OVL',
+          due: { date: '2020-01-01' },
+        }),
+      ];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const deps: TickDeps = {
+        api: api(tasks),
+        config,
+        spawnAgent,
+        log: () => {},
+      };
+      await runTick(deps);
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it('says nothing is due yet when every candidate is due later', async () => {
+      const tasks = [
+        makeTask({ id: 'a', project_id: 'OVL', due: { date: '2099-01-01' } }),
+        makeTask({ id: 'b', project_id: 'OVL', due: { date: '2099-01-02' } }),
+      ];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const logged: string[] = [];
+      const deps: TickDeps = {
+        api: api(tasks),
+        config,
+        spawnAgent,
+        log: (msg) => logged.push(msg),
+      };
+      await runTick(deps);
+      expect(spawnAgent).not.toHaveBeenCalled();
+      expect(logged).toEqual([
+        'No Agent Ready tasks are due yet (2 scheduled for later).',
+      ]);
+    });
+
+    it('logs the deferred count when another task still dispatches', async () => {
+      const tasks = [
+        makeTask({
+          id: 'later',
+          project_id: 'OVL',
+          due: { date: '2099-01-01' },
+        }),
+        makeTask({ id: 'now', project_id: 'OVL' }),
+      ];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const logged: string[] = [];
+      const deps: TickDeps = {
+        api: api(tasks),
+        config,
+        spawnAgent,
+        log: (msg) => logged.push(msg),
+      };
+      await runTick(deps);
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+      expect(logged).toContain('Skipping 1 task(s) scheduled for later.');
+    });
+  });
 });
 
 describe('runLoop', () => {

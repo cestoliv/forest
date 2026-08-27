@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { type AgentSpawnerConfig, DEFAULT_CONFIG } from './config.js';
 import { dispatchTask, type SpawnAgent } from './dispatch.js';
+import { isDue } from './due.js';
 import type { TodoistApi, TodoistTask } from './todoist.js';
 
 export interface TickDeps {
@@ -25,16 +26,29 @@ export async function runTick(deps: TickDeps): Promise<void> {
     throw new Error('Configured label ids were not found in Todoist labels.');
   }
 
-  const candidates = (await api.listTasksByLabel(readyName))
-    .filter(
-      (t) => !t.labels.includes(workingName) && !t.labels.includes(errorName),
-    )
+  const unclaimed = (await api.listTasksByLabel(readyName)).filter(
+    (t) => !t.labels.includes(workingName) && !t.labels.includes(errorName),
+  );
+
+  const now = new Date();
+  const candidates = unclaimed
+    .filter((t) => isDue(t, now))
     .sort((a, b) => a.added_at.localeCompare(b.added_at));
 
+  const deferred = unclaimed.length - candidates.length;
   const task: TodoistTask | undefined = candidates[0];
   if (!task) {
-    log('No Agent Ready tasks to dispatch.');
+    // Name the deferred tasks here rather than claiming there are none, so a
+    // quiet tick explains itself in `agent-spawner logs`.
+    log(
+      deferred > 0
+        ? `No Agent Ready tasks are due yet (${deferred} scheduled for later).`
+        : 'No Agent Ready tasks to dispatch.',
+    );
     return;
+  }
+  if (deferred > 0) {
+    log(`Skipping ${deferred} task(s) scheduled for later.`);
   }
 
   await dispatchTask(task, {

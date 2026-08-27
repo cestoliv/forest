@@ -333,6 +333,10 @@ skew between the daemon and `wt`). After dispatching it swaps the label to
 be retried. See `packages/cli/CLAUDE.md`'s `## agent-spawner` section for the
 full architecture.
 
+A Todoist due date acts as a start date. A task with no due date is picked up
+on the next tick. A task due later waits until that moment passes, so you set
+a due date in the future to schedule work for a later day.
+
 Installed by the same `npm install -g @cestoliv/forest` above.
 
 ```bash
