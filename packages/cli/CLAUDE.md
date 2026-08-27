@@ -325,10 +325,29 @@ the whole matched `RouteRule` (not just `path`) so `dispatchTask` can read its
 a `RouteRule` with no `ide` (or a blank one, which `loadConfig` normalises to
 `undefined`) falls back to `wt`'s configured `ide` default via
 `createAgentWorktree`'s `options.ide ?? config.ide`. Every `pollIntervalSeconds` (default 600) it fetches `Agent
-Ready` tasks, picks the oldest not already Working/Error, resolves a repo via
-the rules, and dispatches. The prompt sent to `wt agent` is built from
-`promptTemplate` with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, and
-`{{projectId}}` placeholders.
+Ready` tasks, drops the ones already Working/Error or due later, picks the
+oldest of the rest, resolves a repo via the rules, and dispatches. The prompt
+sent to `wt agent` is built from `promptTemplate` with `{{url}}`, `{{title}}`,
+`{{id}}`, `{{description}}`, and `{{projectId}}` placeholders.
+
+### A Todoist due date is a start date
+
+`isDue` (`src/spawner/lib/due.ts`) gates pickup. A task with no due date is
+always eligible. A task with one waits until that moment passes, so you set a
+due date in the future to schedule work for later. That is how you spread
+Claude Code token use across days.
+
+Date-only (`YYYY-MM-DD`) and floating (`YYYY-MM-DDTHH:MM:SS`) due dates are
+read in local time, matching what Todoist shows you: a task due today becomes
+eligible at local midnight. A due date with a zone suffix is an absolute
+instant. An unparseable due date counts as due, so a malformed date never
+strands a task.
+
+Two things the gate deliberately does not do. It ignores `deadline`, because a
+deadline says when work must finish, not when it may start. It does not
+reorder: eligible tasks still sort oldest `added_at` first. When a tick defers
+tasks, `runTick` logs the count, so an idle tick explains itself in
+`agent-spawner logs`.
 
 ### Dispatch is now in-process, not a subprocess on `$PATH`
 

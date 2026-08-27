@@ -1,3 +1,11 @@
+export interface TodoistDue {
+  /**
+   * `YYYY-MM-DD` for a date-only due date, `YYYY-MM-DDTHH:MM:SS` for a
+   * floating time, or the same with a zone suffix for an absolute instant.
+   */
+  date: string;
+}
+
 export interface TodoistTask {
   id: string;
   content: string;
@@ -5,6 +13,7 @@ export interface TodoistTask {
   project_id: string;
   labels: string[];
   added_at: string;
+  due?: TodoistDue | null;
 }
 
 export interface TodoistLabel {
