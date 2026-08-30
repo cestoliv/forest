@@ -103,7 +103,9 @@ keymap/Accessibility needed). On other platforms — or when `ide` is neither
 agent.
 
 If the path already exists, `wt agent` offers to open it — or open it and start
-the agent — instead of erroring (in a non-interactive shell it exits non-zero).
+the agent — instead of erroring. A piped or scripted run has nobody to answer
+that prompt, so it starts the agent in the existing worktree. A non-interactive
+`wt create` still exits non-zero, since it has no agent to fall back on.
 
 > **Tip:** trust the parent directory of your worktrees in Claude once, and
 > every worktree created beneath it starts hands-free.

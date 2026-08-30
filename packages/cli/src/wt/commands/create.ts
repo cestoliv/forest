@@ -21,6 +21,7 @@ import {
   slugifyBranch,
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
+import { isInteractive } from '../lib/interactive.js';
 import { openWorktreeInOrca } from '../lib/orca.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
@@ -126,8 +127,8 @@ export async function prepareWorktree(
       return null;
     }
 
-    // Guard against non-TTY contexts (e.g., pipes, non-interactive shells)
-    if (!process.stdin.isTTY) {
+    // Guard against non-interactive contexts (e.g., pipes, the daemon)
+    if (!isInteractive()) {
       throw new Error(
         'Interactive repo picker requires a TTY. Please run this command in an interactive terminal.',
       );
@@ -238,13 +239,19 @@ export async function prepareWorktree(
 /**
  * Prompt the user about a worktree that already exists. `wt create` offers
  * open-or-quit; `wt agent` additionally offers starting the agent. In
- * non-interactive contexts, throws a clear error so scripts still fail.
+ * non-interactive contexts `wt agent` picks the agent itself and `wt create`
+ * throws a clear error so scripts still fail.
  */
 export async function promptExistingWorktree(
   worktreePath: string,
   opts: { allowAgent: boolean },
 ): Promise<ExistingWorktreeAction> {
-  if (!process.stdin.isTTY) {
+  if (!isInteractive()) {
+    // Nobody to answer. `wt agent` (allowAgent) wants exactly what a human picks
+    // here — start the agent in the worktree that already exists — so the daemon
+    // proceeds instead of hanging or failing the task. A plain `wt create` has no
+    // such fallback, so it still errors.
+    if (opts.allowAgent) return 'agent';
     throw new Error(`Worktree path already exists: ${worktreePath}`);
   }
 

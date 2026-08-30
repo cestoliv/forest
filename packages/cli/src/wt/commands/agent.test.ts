@@ -7,6 +7,7 @@ import { confirm } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
 import { openIde } from '../lib/ide.js';
+import { setInteractive } from '../lib/interactive.js';
 import { openWorktreeInOrca, startAgentInOrca } from '../lib/orca.js';
 import {
   buildAgentTask,
@@ -229,6 +230,29 @@ describe('createAgentWorktree', () => {
 
     expect(openAccessibilitySettings).toHaveBeenCalled();
     expect(cleanupAgentTask).not.toHaveBeenCalled();
+  });
+
+  it('skips the Accessibility retry loop when nobody can answer it', async () => {
+    const store = configure();
+    vi.mocked(triggerChord).mockResolvedValue({
+      ok: false,
+      reason: 'accessibility',
+    });
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    setInteractive(false);
+    try {
+      await createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+      });
+    } finally {
+      setInteractive(true);
+      process.stdin.isTTY = originalIsTTY;
+    }
+
+    expect(openAccessibilitySettings).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it('names Terminal as the grantee in the Accessibility prompt over SSH', async () => {
@@ -561,6 +585,32 @@ describe('createAgentWorktree (existing worktree)', () => {
     expect(writeAgentTask).toHaveBeenCalled();
     expect(triggerChord).toHaveBeenCalled();
     expect(cleanupAgentTask).toHaveBeenCalled();
+  });
+
+  it('starts the agent with no prompt when nobody can answer one', async () => {
+    vi.useFakeTimers();
+    const store = preexisting();
+    // A real TTY plus setInteractive(false) is the daemon's own situation: it
+    // inherits the shell's TTY, so the TTY check alone would still prompt.
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    setInteractive(false);
+    try {
+      // No existingWorktreePrompt injected, so the real promptExistingWorktree
+      // runs and takes its non-interactive branch.
+      const promise = createAgentWorktree('feature', 'do stuff', {
+        repoRoot: repoDir,
+        store,
+      });
+      await vi.runAllTimersAsync();
+      await promise;
+    } finally {
+      setInteractive(true);
+      process.stdin.isTTY = originalIsTTY;
+    }
+
+    expect(writeAgentTask).toHaveBeenCalled();
+    expect(triggerChord).toHaveBeenCalled();
   });
 });
 

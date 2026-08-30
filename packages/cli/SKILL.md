@@ -131,8 +131,11 @@ nothing to drive, so it falls back to the manual "press the chord in Zed"
 message.
 
 If the worktree path already exists, `wt agent` prompts you to **open it in the
-IDE**, **open it and start the agent**, or **quit** — instead of erroring. (In a
-non-interactive shell it errors with a non-zero exit instead of prompting.)
+IDE**, **open it and start the agent**, or **quit** — instead of erroring. With
+nobody to answer that prompt (a piped or scripted run, or the `agent-spawner`
+daemon) it starts the agent in the existing worktree, which is what a human
+picks there. `wt create` has no agent to fall back on, so a non-interactive run
+still errors with a non-zero exit.
 
 ### `wt prune`
 
