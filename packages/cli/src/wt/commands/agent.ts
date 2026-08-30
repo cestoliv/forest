@@ -2,6 +2,7 @@
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
 import type { RepoConfig } from '../lib/config.js';
+import { isInteractive } from '../lib/interactive.js';
 import { buildAgentCommandLine, startAgentInOrca } from '../lib/orca.js';
 import {
   buildTemplateVars,
@@ -247,11 +248,7 @@ async function startAgentInWorktree(
   // Missing Accessibility is the common first-run blocker and is fixable: guide
   // the user to grant it, then retry (Zed is already open, so skip the load
   // delay). Loop until it works or the user declines.
-  while (
-    !result.ok &&
-    result.reason === 'accessibility' &&
-    process.stdin.isTTY
-  ) {
+  while (!result.ok && result.reason === 'accessibility' && isInteractive()) {
     report(
       pc.yellow(
         '⚠ macOS Accessibility permission is required to send the keystroke ' +

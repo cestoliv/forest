@@ -11,9 +11,11 @@ import { execSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { select } from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runAgent } from './agent-api.js';
 import { createStore, setGlobalConfig } from './lib/config.js';
+import { triggerChord, writeAgentTask } from './lib/zed.js';
 
 // The Zed automation and IDE launch can't run headless in CI; stub them so the
 // agent "starts" successfully while the real git/worktree layer is untouched.
@@ -34,6 +36,19 @@ vi.mock('./lib/zed.js', async (importOriginal) => {
     isHeadlessSession: vi.fn(() => false),
   };
 });
+
+// This file exercises the daemon seam, where nothing should ever prompt. Stub
+// clack so a regression fails on the assertions below instead of rendering a
+// real select and hanging to the vitest timeout. `select` answers 'quit'
+// because that is the only answer that makes a regression visible: an
+// unanswered select resolves undefined, which `createAgentWorktree` treats as
+// "not quit, not open" and so starts the agent anyway.
+vi.mock('@clack/prompts', () => ({
+  confirm: vi.fn(async () => false),
+  isCancel: vi.fn(() => false),
+  select: vi.fn(async () => 'quit'),
+  text: vi.fn(),
+}));
 
 let tmpDir: string;
 let repoDir: string;
@@ -141,5 +156,60 @@ describe('runAgent (E2E, real git)', () => {
     expect(
       execSync('git worktree list', { cwd: repoDir }).toString(),
     ).toContain(wtPath);
+  });
+
+  it('starts the agent again when the worktree already exists', async () => {
+    vi.useFakeTimers();
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig(
+      {
+        worktree_path: '../',
+        base_branch: 'HEAD',
+        setup_commands: [],
+        ide: 'zed',
+        ide_open_args: [],
+        agent_command: 'echo agent',
+      },
+      store,
+    );
+
+    const first = runAgent({
+      repoPath: repoDir,
+      branch: 'e2e-again',
+      prompt: 'do it',
+      store,
+    });
+    await vi.runAllTimersAsync();
+    await first;
+
+    vi.clearAllMocks();
+
+    // Second dispatch of the same branch: the worktree is already there, so the
+    // existing-worktree prompt would hang the daemon. It must start the agent.
+    // A real TTY is the daemon's own situation (`agent-spawner run` inherits the
+    // shell's), and it is what makes runAgent's setInteractive(false) the line
+    // under test rather than vitest's own missing TTY.
+    const originalIsTTY = process.stdin.isTTY;
+    process.stdin.isTTY = true;
+    let res: Awaited<ReturnType<typeof runAgent>>;
+    try {
+      const second = runAgent({
+        repoPath: repoDir,
+        branch: 'e2e-again',
+        prompt: 'do it again',
+        store,
+      });
+      await vi.runAllTimersAsync();
+      res = await second;
+    } finally {
+      process.stdin.isTTY = originalIsTTY;
+    }
+
+    expect(res.ok).toBe(true);
+    expect(res.output).not.toMatch(/already exists/);
+    expect(writeAgentTask).toHaveBeenCalled();
+    expect(triggerChord).toHaveBeenCalled();
+    // Nothing rendered a prompt at all, TTY or no TTY.
+    expect(select).not.toHaveBeenCalled();
   });
 });

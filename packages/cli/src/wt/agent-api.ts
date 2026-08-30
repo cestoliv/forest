@@ -1,5 +1,6 @@
 import { createAgentWorktree } from './commands/agent.js';
 import type { ConfigStore } from './lib/config.js';
+import { setInteractive } from './lib/interactive.js';
 
 export type Reporter = (msg: string) => void;
 export interface AgentResult {
@@ -26,12 +27,16 @@ export interface RunAgentOptions {
  * Never calls process.exit; a throw becomes `{ ok: false }`.
  */
 export async function runAgent(opts: RunAgentOptions): Promise<AgentResult> {
+  // No human is watching, even when the daemon was started from a shell and so
+  // inherited that shell's TTY. Never restored: this process is the daemon for
+  // its whole life.
+  setInteractive(false);
   const lines: string[] = [];
   const report: Reporter = (m) => lines.push(m);
   try {
     const outcome = await createAgentWorktree(opts.branch, opts.prompt, {
       // Pass repoRoot (not cwd): upstream's "always global" change made the repo
-      // picker always run unless repoRoot is set, and the daemon has no TTY.
+      // picker always run unless repoRoot is set, and the daemon can't answer it.
       repoRoot: opts.repoPath,
       // Undefined mode lets createAgentWorktree resolve config.agent_mode ?? 'default'.
       mode: opts.mode,

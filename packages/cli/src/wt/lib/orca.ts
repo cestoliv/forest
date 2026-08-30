@@ -9,6 +9,7 @@
 // without an agent.
 import { spawn } from 'node:child_process';
 import * as clack from '@clack/prompts';
+import { isInteractive } from './interactive.js';
 
 // ---------------------------------------------------------------------------
 // Pure functions (no I/O) — unit-tested directly.
@@ -344,14 +345,14 @@ const defaultSleep: Sleeper = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Default retry prompt for the `selector_not_found` path. TTY-gated: with no
- * interactive stdin (the daemon, a piped run) it returns false immediately so
+ * Default retry prompt for the `selector_not_found` path. Interactivity-gated:
+ * with nobody to answer (the daemon, a piped run) it returns false so
  * the flow reports the hint and gives up rather than blocking on a prompt that
  * can't be answered. Otherwise it asks the user to confirm they've enabled the
  * repo's external-worktree visibility in Orca, and retries on yes.
  */
 const defaultConfirmRetry: RetryConfirm = async () => {
-  if (!process.stdin.isTTY) return false;
+  if (!isInteractive()) return false;
   const proceed = await clack.confirm({
     message:
       'Enabled external-worktree visibility for this repo in Orca? Retry terminal create?',
