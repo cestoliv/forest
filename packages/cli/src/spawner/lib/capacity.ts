@@ -34,6 +34,10 @@ export function listWorktreeBranches(repoPath: string): string[] {
   } catch {
     // A path that is not a readable repo holds nothing, so a typo in a rule
     // never wedges the daemon behind a cap it cannot measure.
+    // ponytail: an unreadable repo counts as 0, so a transient git failure (a
+    // `safe.directory` refusal, an unmounted volume) lowers the global sum and
+    // lets the other repos spawn past `maxWorktrees`. Fail closed only if that
+    // ever bites, since a typo'd rule path would then wedge the daemon instead.
     return [];
   }
 }
@@ -57,6 +61,12 @@ export function checkCapacity(
   // A branch that already has a worktree adds none: `wt agent` reuses it (see
   // `promptExistingWorktree`). No cap may hold that task, or a retry after an
   // "Agent Error" would stall for good once the repo is full.
+  // ponytail: this matches on the branch, while `wt` decides to reuse from the
+  // path `resolveWorktreePath` computes. The two agree until a worktree sits
+  // somewhere else (made by hand, or `worktree_path` changed since), and then
+  // the exempted dispatch fails on `git worktree add` and the task is labelled
+  // "Agent Error" instead. Compare paths only if that ever bites: it would
+  // couple the daemon to `wt`'s per-repo config.
   if (here.includes(branch)) return null;
 
   const repoCap = config.maxWorktreesPerRepo[repoPath] ?? 0;

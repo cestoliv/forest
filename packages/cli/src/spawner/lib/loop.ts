@@ -57,6 +57,10 @@ export async function runTick(deps: TickDeps): Promise<void> {
   // would otherwise respawn `git worktree list` for every task against every
   // rule path, on every tick, for as long as a cap holds. One snapshot also
   // keeps a tick's decisions consistent with each other.
+  // ponytail: the snapshot goes stale within the tick. Since a tick dispatches
+  // at most once, only a `wt create` racing this walk can push a repo one over
+  // its cap, and the next tick sees the true count. Re-read per task if a cap
+  // ever has to hold exactly.
   const read = deps.listWorktreeBranches ?? listWorktreeBranches;
   const seen = new Map<string, string[]>();
   const readOnce = (repoPath: string): string[] => {
