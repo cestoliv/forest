@@ -389,6 +389,14 @@ task it belongs to is exempt (its retry reuses it), but **other** tasks routed
 at the same repo are not, so delete a dead worktree with `wt` rather than
 leaving it to hold a slot.
 
+Delete a worktree directory by hand and you must run `git worktree prune`. A
+prunable entry keeps reserving its branch, so the cap stops counting it (see
+the `prunable` rule above) and permits the dispatch, but `git worktree add`
+then fails with `fatal: '<branch>' is already used by worktree at '<the gone
+path>'`. The task is labelled `Agent Error`, with that line in the comment.
+`wt`'s own delete path handles this for you; only a manual `rm -rf` leaves the
+entry behind.
+
 `dispatchTask` returns `'handled' | 'at-capacity'` so `runTick` can walk the
 due candidates oldest first and stop at the first one a cap does not hold. A
 full repo therefore cannot starve a task routed at a repo with room. The pace

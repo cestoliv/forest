@@ -1,6 +1,6 @@
 import { runAgent } from '../../wt/agent-api.js';
 import { buildBranchName } from './branch.js';
-import { checkCapacity, listWorktreeBranches } from './capacity.js';
+import { checkCapacity } from './capacity.js';
 import type { AgentSpawnerConfig } from './config.js';
 import { resolveRoute } from './router.js';
 import { renderTemplate } from './template.js';
@@ -58,12 +58,9 @@ export async function dispatchTask(
 
   const branch = buildBranchName(config.branchPrefix, task.content, task.id);
 
-  const full = checkCapacity(
-    config,
-    path,
-    branch,
-    deps.listWorktreeBranches ?? listWorktreeBranches,
-  );
+  // Undefined falls through to `checkCapacity`'s own default, so there is one
+  // fallback rather than one here and one there.
+  const full = checkCapacity(config, path, branch, deps.listWorktreeBranches);
   if (full) {
     // Leave every label alone. The task stays "Agent Ready" and a later tick
     // picks it up once a worktree is pruned, so a cap defers work, never fails
