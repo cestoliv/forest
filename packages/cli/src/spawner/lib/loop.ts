@@ -1,16 +1,19 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { listWorktreeBranches } from './capacity.js';
 import { type AgentSpawnerConfig, DEFAULT_CONFIG } from './config.js';
 import { dispatchTask, type SpawnAgent } from './dispatch.js';
 import { isDue } from './due.js';
-import type { TodoistApi, TodoistTask } from './todoist.js';
+import type { TodoistApi } from './todoist.js';
 
 export interface TickDeps {
   api: TodoistApi;
   config: AgentSpawnerConfig;
   spawnAgent: SpawnAgent;
   log: (msg: string) => void;
+  /** Injected worktree reader for tests; production omits it. */
+  listWorktreeBranches?: (repoPath: string) => string[];
 }
 
 export async function runTick(deps: TickDeps): Promise<void> {
@@ -36,8 +39,7 @@ export async function runTick(deps: TickDeps): Promise<void> {
     .sort((a, b) => a.added_at.localeCompare(b.added_at));
 
   const deferred = unclaimed.length - candidates.length;
-  const task: TodoistTask | undefined = candidates[0];
-  if (!task) {
+  if (candidates.length === 0) {
     // Name the deferred tasks here rather than claiming there are none, so a
     // quiet tick explains itself in `agent-spawner logs`.
     log(
@@ -51,14 +53,37 @@ export async function runTick(deps: TickDeps): Promise<void> {
     log(`Skipping ${deferred} task(s) scheduled for later.`);
   }
 
-  await dispatchTask(task, {
-    api,
-    config,
-    idToName,
-    nameToId,
-    spawnAgent,
-    log,
-  });
+  // Read each repo's worktrees at most once per tick. Walking the candidates
+  // would otherwise respawn `git worktree list` for every task against every
+  // rule path, on every tick, for as long as a cap holds. One snapshot also
+  // keeps a tick's decisions consistent with each other.
+  const read = deps.listWorktreeBranches ?? listWorktreeBranches;
+  const seen = new Map<string, string[]>();
+  const readOnce = (repoPath: string): string[] => {
+    const cached = seen.get(repoPath);
+    if (cached !== undefined) return cached;
+    const branches = read(repoPath);
+    seen.set(repoPath, branches);
+    return branches;
+  };
+
+  // Walk the candidates oldest first and stop at the first one that is not
+  // held by a worktree cap, so a full repo cannot starve a task routed at a
+  // repo that still has room. Still at most one dispatch per tick.
+  for (const task of candidates) {
+    const outcome = await dispatchTask(task, {
+      api,
+      config,
+      idToName,
+      nameToId,
+      spawnAgent,
+      log,
+      listWorktreeBranches: readOnce,
+    });
+    if (outcome !== 'at-capacity') return;
+  }
+
+  log(`Every due task (${candidates.length}) targets a repo at its cap.`);
 }
 
 export function defaultLockPath(): string {

@@ -20,6 +20,8 @@ function tmpStore(): Conf<AgentSpawnerConfig> {
 const valid: AgentSpawnerConfig = {
   token: 'cfg-token',
   pollIntervalSeconds: 600,
+  maxWorktrees: 0,
+  maxWorktreesPerRepo: {},
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '1', working: '2', error: '3' },
@@ -124,6 +126,70 @@ describe('loadConfig', () => {
       store.store = { ...valid, pollIntervalSeconds: 30 };
       const cfg = loadConfig(store);
       expect(cfg.pollIntervalSeconds).toBe(30);
+    });
+  });
+
+  describe('worktree caps', () => {
+    it('defaults both caps to unlimited', () => {
+      const store = tmpStore();
+      store.store = { ...valid };
+      const cfg = loadConfig(store);
+      expect(cfg.maxWorktrees).toBe(0);
+      expect(cfg.maxWorktreesPerRepo).toEqual({});
+    });
+
+    it('expands ~ in the per-repo keys so they match a rule path', () => {
+      const store = tmpStore();
+      store.store = { ...valid, maxWorktreesPerRepo: { '~/dev/repo': 2 } };
+      const cfg = loadConfig(store);
+      expect(cfg.maxWorktreesPerRepo).toEqual({
+        [path.join(os.homedir(), 'dev/repo')]: 2,
+      });
+      expect(cfg.maxWorktreesPerRepo[cfg.rules[0].path]).toBe(2);
+    });
+
+    it('throws when maxWorktrees is negative', () => {
+      const store = tmpStore();
+      store.store = { ...valid, maxWorktrees: -1 };
+      expect(() => loadConfig(store)).toThrow(/maxWorktrees/i);
+    });
+
+    it('throws when maxWorktrees is not an integer', () => {
+      const store = tmpStore();
+      store.store = { ...valid, maxWorktrees: 1.5 };
+      expect(() => loadConfig(store)).toThrow(/maxWorktrees/i);
+    });
+
+    it('throws when maxWorktreesPerRepo is not a map', () => {
+      const store = tmpStore();
+      // A slip for `maxWorktrees`: `Object.entries(4)` is empty, which would
+      // read as "no per-repo caps" rather than as a mistake.
+      store.store = {
+        ...valid,
+        maxWorktreesPerRepo: 4 as unknown as Record<string, number>,
+      };
+      expect(() => loadConfig(store)).toThrow(
+        /maxWorktreesPerRepo: must be an object/,
+      );
+    });
+
+    it('throws when a per-repo key matches no rule path', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        // A trailing slash is enough: the cap is looked up by exact path.
+        maxWorktreesPerRepo: { '~/dev/repo/': 2 },
+      };
+      expect(() => loadConfig(store)).toThrow(/matches no rules\[\]\.path/);
+    });
+
+    it('throws when a per-repo cap is non-numeric, naming the repo', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        maxWorktreesPerRepo: { '~/dev/repo': '2' as unknown as number },
+      };
+      expect(() => loadConfig(store)).toThrow(/~\/dev\/repo/);
     });
   });
 });

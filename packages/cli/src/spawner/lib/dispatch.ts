@@ -1,5 +1,6 @@
 import { runAgent } from '../../wt/agent-api.js';
 import { buildBranchName } from './branch.js';
+import { checkCapacity, listWorktreeBranches } from './capacity.js';
 import type { AgentSpawnerConfig } from './config.js';
 import { resolveRoute } from './router.js';
 import { renderTemplate } from './template.js';
@@ -19,12 +20,21 @@ export interface DispatchDeps {
   nameToId: Map<string, string>;
   spawnAgent: SpawnAgent;
   log: (msg: string) => void;
+  /** Injected worktree reader for tests; production omits it. */
+  listWorktreeBranches?: (repoPath: string) => string[];
 }
+
+/**
+ * `at-capacity` means nothing happened: the task keeps its labels and a later
+ * tick retries it. Every other path acted on the task, so the caller stops
+ * there and keeps the daemon's one-dispatch-per-tick pace.
+ */
+export type DispatchOutcome = 'handled' | 'at-capacity';
 
 export async function dispatchTask(
   task: TodoistTask,
   deps: DispatchDeps,
-): Promise<void> {
+): Promise<DispatchOutcome> {
   const { api, config, nameToId, spawnAgent, log } = deps;
   const readyName = mustName(nameToId, config.labels.ready, 'ready');
   const workingName = mustName(nameToId, config.labels.working, 'working');
@@ -42,11 +52,26 @@ export async function dispatchTask(
       `agent-spawner: no routing rule matched (project ${task.project_id}). Add a rule or fix labels, then remove the "${errorName}" label to retry.`,
     );
     await api.updateTaskLabels(task.id, addOnce(task.labels, errorName));
-    return;
+    return 'handled';
   }
   const { path, ide } = rule;
 
   const branch = buildBranchName(config.branchPrefix, task.content, task.id);
+
+  const full = checkCapacity(
+    config,
+    path,
+    branch,
+    deps.listWorktreeBranches ?? listWorktreeBranches,
+  );
+  if (full) {
+    // Leave every label alone. The task stays "Agent Ready" and a later tick
+    // picks it up once a worktree is pruned, so a cap defers work, never fails
+    // it.
+    log(`Holding task ${task.id}: ${path} ${full}.`);
+    return 'at-capacity';
+  }
+
   const prompt = renderTemplate(config.promptTemplate, task);
   log(
     `Dispatching task ${task.id} -> ${path}${ide ? ` (ide ${ide})` : ''} (branch ${branch}).`,
@@ -66,7 +91,7 @@ export async function dispatchTask(
     next.push(workingName);
     await api.updateTaskLabels(task.id, next);
     log(`Task ${task.id} dispatched; labelled "${workingName}".`);
-    return;
+    return 'handled';
   }
 
   log(`wt agent failed for task ${task.id}.`);
@@ -75,6 +100,7 @@ export async function dispatchTask(
     `agent-spawner: wt agent failed.\n\n${result.output}`.slice(0, 15000),
   );
   await api.updateTaskLabels(task.id, addOnce(task.labels, errorName));
+  return 'handled';
 }
 
 function mustName(

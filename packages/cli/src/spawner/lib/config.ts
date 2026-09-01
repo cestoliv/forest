@@ -25,6 +25,16 @@ export interface AgentSpawnerConfig {
   branchPrefix: string;
   promptTemplate: string;
   labels: LabelConfig;
+  /**
+   * Cap on the worktrees of every repo the `rules` point at, counted together.
+   * 0 means unlimited.
+   */
+  maxWorktrees: number;
+  /**
+   * Cap on one repo's worktrees, keyed by the same path a `RouteRule` uses
+   * (`~` is expanded). An absent entry, or 0, means unlimited.
+   */
+  maxWorktreesPerRepo: Record<string, number>;
   rules: RouteRule[];
 }
 
@@ -34,6 +44,8 @@ export const DEFAULT_CONFIG: AgentSpawnerConfig = {
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '', working: '', error: '' },
+  maxWorktrees: 0,
+  maxWorktreesPerRepo: {},
   rules: [],
 };
 
@@ -93,12 +105,55 @@ export function loadConfig(
     );
   }
 
+  // Reject a value that is not a path-to-cap map. `Object.entries` reads a
+  // number as empty, so `"maxWorktreesPerRepo": 4` (a slip for `maxWorktrees`)
+  // would otherwise leave every per-repo cap quietly off.
+  const rawPerRepo = raw.maxWorktreesPerRepo ?? {};
+  if (typeof rawPerRepo !== 'object' || Array.isArray(rawPerRepo)) {
+    throw new Error(
+      'Invalid maxWorktreesPerRepo: must be an object mapping a repo path to a cap.',
+    );
+  }
+
+  // Expand the per-repo keys the same way rule paths are expanded, so
+  // `~/dev/repo` in the map still matches the repo a rule routes to.
+  const maxWorktreesPerRepo = Object.fromEntries(
+    Object.entries(rawPerRepo).map(([repo, cap]) => [
+      expandHome(repo),
+      readCap(cap, `maxWorktreesPerRepo["${repo}"]`),
+    ]),
+  );
+
+  // The cap is looked up by exact path, so a key that matches no rule would do
+  // nothing at all. Say so instead: a silent no-op cap is worse than a
+  // startup error, and a trailing slash or a typo is easy to make.
+  const rulePaths = new Set(rules.map((rule) => rule.path));
+  for (const repo of Object.keys(maxWorktreesPerRepo)) {
+    if (!rulePaths.has(repo)) {
+      throw new Error(
+        `Invalid maxWorktreesPerRepo["${repo}"]: matches no rules[].path.`,
+      );
+    }
+  }
+
   return {
     token,
     pollIntervalSeconds,
     branchPrefix: raw.branchPrefix ?? DEFAULT_CONFIG.branchPrefix,
     promptTemplate: raw.promptTemplate ?? DEFAULT_CONFIG.promptTemplate,
     labels: raw.labels,
+    maxWorktrees: readCap(raw.maxWorktrees, 'maxWorktrees'),
+    maxWorktreesPerRepo,
     rules,
   };
+}
+
+function readCap(value: number | undefined, key: string): number {
+  const cap = value ?? 0;
+  if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 0) {
+    throw new Error(
+      `Invalid ${key}: must be a non-negative integer (got ${cap}).`,
+    );
+  }
+  return cap;
 }
