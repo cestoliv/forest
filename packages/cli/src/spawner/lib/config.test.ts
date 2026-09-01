@@ -1,11 +1,14 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type Conf from 'conf';
+import envPaths from 'env-paths';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type AgentSpawnerConfig,
   createStore,
   DEFAULT_CONFIG,
+  getConfigFilePath,
   loadConfig,
 } from './config.js';
 
@@ -191,5 +194,43 @@ describe('loadConfig', () => {
       };
       expect(() => loadConfig(store)).toThrow(/~\/dev\/repo/);
     });
+  });
+});
+
+describe('getConfigFilePath', () => {
+  it('matches the path conf derives, without touching the real global store', () => {
+    // Pins that `env-paths`' default suffix is `nodejs`, the assumption
+    // `DEFAULT_CONFIG_DIR` (config.ts:53) relies on — `conf`'s own path scheme
+    // is pinned only for a scoped `cwd`, by the next test.
+    expect(getConfigFilePath()).toBe(
+      path.join(
+        envPaths('agent-spawner', { suffix: 'nodejs' }).config,
+        'config.json',
+      ),
+    );
+  });
+
+  it('matches createStore(cwd).path', () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'as-cfg-path-'));
+    try {
+      expect(getConfigFilePath(cwd)).toBe(createStore(cwd).path);
+    } finally {
+      rmSync(cwd, { recursive: true });
+    }
+  });
+});
+
+describe('createStore with corrupt config', () => {
+  it('throws a wrapped error naming the config path', () => {
+    const cwd = mkdtempSync(path.join(os.tmpdir(), 'as-cfg-corrupt-'));
+    try {
+      writeFileSync(path.join(cwd, 'config.json'), '{bad json!!!}');
+
+      expect(() => createStore(cwd)).toThrow(
+        `Error reading config file: ${getConfigFilePath(cwd)}`,
+      );
+    } finally {
+      rmSync(cwd, { recursive: true });
+    }
   });
 });

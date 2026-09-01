@@ -1,6 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import Conf from 'conf';
+import envPaths from 'env-paths';
 
 export interface RouteRule {
   project: string;
@@ -49,12 +50,26 @@ export const DEFAULT_CONFIG: AgentSpawnerConfig = {
   rules: [],
 };
 
+const DEFAULT_CONFIG_DIR = envPaths('agent-spawner').config;
+
+export function getConfigFilePath(cwd?: string): string {
+  const dir = cwd ?? DEFAULT_CONFIG_DIR;
+  return path.join(dir, 'config.json');
+}
+
 export function createStore(cwd?: string): Conf<AgentSpawnerConfig> {
-  return new Conf<AgentSpawnerConfig>({
-    projectName: 'agent-spawner',
-    defaults: DEFAULT_CONFIG,
-    ...(cwd ? { cwd } : {}),
-  });
+  try {
+    return new Conf<AgentSpawnerConfig>({
+      projectName: 'agent-spawner',
+      defaults: DEFAULT_CONFIG,
+      ...(cwd ? { cwd } : {}),
+    });
+  } catch (error) {
+    const configPath = getConfigFilePath(cwd);
+    throw new Error(
+      `Error reading config file: ${configPath}\n${error instanceof Error ? error.message : error}`,
+    );
+  }
 }
 
 function expandHome(p: string): string {

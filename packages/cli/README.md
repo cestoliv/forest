@@ -262,7 +262,9 @@ Pass `--no-pull` to skip this entirely. The TUI `P` key **always** auto-pulls
 ## Configuration
 
 Edit with `wt config` (`wt config --path` prints the file location —
-`~/Library/Preferences/wt-nodejs/config.json` on macOS).
+`~/Library/Preferences/wt-nodejs/config.json` on macOS). The file is
+beautified before the editor opens, and if it's still invalid JSON when you
+close the editor, `wt config` prints the parse error and exits 1.
 
 | Key                   | Default                           | Description                                                                         |
 | --------------------- | --------------------------------- | ----------------------------------------------------------------------------------- |
@@ -356,7 +358,11 @@ agent-spawner config [--path]    # open config in $EDITOR, or print its path
 ### Configuration
 
 Config essentials (`agent-spawner config --path` for the file location;
-`config.example.json` is a ready-made starting point):
+`config.example.json` is a ready-made starting point). Unlike `wt config`,
+running `agent-spawner config` on a first run with no config file seeds it
+with the defaults before opening the editor. As with `wt config`, the file is
+beautified on open, and an invalid JSON edit prints the parse error and exits
+1 instead of leaving you stuck:
 
 - **`token`** — a Todoist API token (or set `TODOIST_API_TOKEN`)
 - **`labels`** — the `ready` / `working` / `error` Todoist label ids the

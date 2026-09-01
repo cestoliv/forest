@@ -1,8 +1,9 @@
 // src/commands/config.test.ts
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readConfigParseError } from '../../config-file.js';
 import { getConfigFilePath } from '../lib/config.js';
 import { openConfig, printConfigPath } from './config.js';
 
@@ -47,7 +48,8 @@ describe('openConfig', () => {
         expect.stringContaining(getConfigFilePath(tmpDir)),
       );
     } finally {
-      process.env.EDITOR = originalEditor;
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
     }
   });
 
@@ -67,7 +69,28 @@ describe('openConfig', () => {
       await new Promise<void>((resolve) => child.on('close', () => resolve()));
       expect(exitSpy).toHaveBeenCalledWith(0);
     } finally {
-      process.env.EDITOR = originalEditor;
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
+    }
+  });
+
+  it('beautifies a valid one-line config.json before the editor opens', async () => {
+    writeFileSync(path.join(tmpDir, 'config.json'), '{"a":1,"b":{"c":2}}');
+    const originalEditor = process.env.EDITOR;
+    try {
+      process.env.EDITOR = 'true';
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+
+      const child = openConfig(tmpDir);
+
+      await new Promise<void>((resolve) => child.on('close', () => resolve()));
+      expect(readFileSync(path.join(tmpDir, 'config.json'), 'utf8')).toBe(
+        JSON.stringify({ a: 1, b: { c: 2 } }, undefined, '\t'),
+      );
+    } finally {
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
     }
   });
 });
@@ -94,6 +117,7 @@ describe('openConfig without valid config', () => {
     try {
       process.env.EDITOR = 'true';
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const exitSpy = vi
         .spyOn(process, 'exit')
         .mockImplementation(() => undefined as never);
@@ -103,9 +127,19 @@ describe('openConfig without valid config', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining(tmpDir));
 
       await new Promise<void>((resolve) => child.on('close', () => resolve()));
-      expect(exitSpy).toHaveBeenCalledWith(0);
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      const parseError = readConfigParseError(path.join(tmpDir, 'config.json'));
+      expect(parseError).toBeDefined();
+      if (!parseError) throw new Error('expected a parse error');
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining(parseError),
+      );
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('wt config'),
+      );
     } finally {
-      process.env.EDITOR = originalEditor;
+      if (originalEditor === undefined) delete process.env.EDITOR;
+      else process.env.EDITOR = originalEditor;
     }
   });
 });
