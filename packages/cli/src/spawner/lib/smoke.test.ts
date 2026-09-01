@@ -15,6 +15,8 @@ import type { LoopDeps } from './loop.js';
 const config: AgentSpawnerConfig = {
   token: 't',
   pollIntervalSeconds: 600,
+  maxWorktrees: 0,
+  maxWorktreesPerRepo: {},
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '1', working: '2', error: '3' },

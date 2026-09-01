@@ -324,7 +324,8 @@ here from its original README:
 - `agent-spawner config [--path]` — open config in `$EDITOR`, or print its path
 
 Config: a Todoist API token (`TODOIST_API_TOKEN` env var or `token` in
-config), the three label ids (`ready`/`working`/`error`), and ordered routing
+config), the three label ids (`ready`/`working`/`error`), the worktree caps
+(`maxWorktrees`/`maxWorktreesPerRepo`, see "Worktree caps"), and ordered routing
 `rules` (project + optional label ids → repo path, plus an optional per-route
 `ide`; first match wins, see `src/spawner/lib/router.ts`).
 `packages/cli/config.example.json` has a starting point. `resolveRoute` returns
@@ -337,6 +338,75 @@ Ready` tasks, drops the ones already Working/Error or due later, picks the
 oldest of the rest, resolves a repo via the rules, and dispatches. The prompt
 sent to `wt agent` is built from `promptTemplate` with `{{url}}`, `{{title}}`,
 `{{id}}`, `{{description}}`, and `{{projectId}}` placeholders.
+
+### Worktree caps
+
+Two config keys cap how many worktrees the daemon spawns.
+`maxWorktreesPerRepo` caps one repo, keyed by the same path a `RouteRule` uses
+(`loadConfig` runs `expandHome` over those keys, so `~/dev/repo` still matches
+the rule it belongs to). `maxWorktrees` caps every repo the rules point at,
+counted together over the deduplicated `rules[].path`. `0`, or an absent
+per-repo entry, means unlimited, so an upgrade changes nothing until you set a
+cap.
+
+The lookup is exact string equality, so `loadConfig` **throws** on a
+`maxWorktreesPerRepo` key that matches no `rules[].path`. A trailing slash or a
+typo would otherwise leave a cap that silently does nothing, which is worse
+than a startup error. A consequence: remove a rule and you must remove its cap
+entry too, or the next config reload logs `Tick error` until you do.
+
+`listWorktreeBranches` (`src/spawner/lib/capacity.ts`) runs `git worktree list
+--porcelain` and returns one branch name per block, minus two kinds. The first
+block is the main checkout, which is the repo itself. Any block carrying a
+`prunable` line is a worktree whose directory is already gone: git keeps
+reporting it until someone runs `git worktree prune`, and it holds no work, so
+it must not hold the cap either. That is why this parses blocks rather than
+reusing `wt`'s `parseWorktreeList`, which surfaces neither `prunable` nor a
+list this shape. A detached worktree contributes an empty string: it occupies a
+slot but matches no branch name. A worktree you created by hand counts: it
+loads the same machine. A path that fails to read holds nothing, so a typo in a
+rule never wedges the daemon behind a cap it cannot measure.
+
+One `git worktree list` answers both questions a cap asks, which is why this
+returns branches rather than a count. The count is `length`. The branch list
+tells `checkCapacity` whether the task's own branch **already** has a worktree,
+and if it does, no cap holds the task: `wt agent` reuses that worktree
+(`promptExistingWorktree` returns `'agent'` for the daemon, which has no TTY)
+instead of adding one. Without that check, a task retried after you cleared its
+`Agent Error` label would stall for good once its repo filled up, even though
+dispatching it costs no new worktree.
+
+`checkCapacity` reads the repo's own cap first, then the global one, and
+returns a reason string or `null`. `dispatchTask` calls it right after
+`resolveRoute` hands it the rule and `buildBranchName` gives it the branch,
+before it spawns anything. At the cap it logs the reason, **touches no
+labels**, and returns `'at-capacity'`: the task keeps `Agent Ready` and a later
+tick picks it up once you prune a worktree. A cap defers a task. It never marks
+it `Agent Error`.
+
+An attempt that failed still leaves a worktree, and that worktree counts. The
+task it belongs to is exempt (its retry reuses it), but **other** tasks routed
+at the same repo are not, so delete a dead worktree with `wt` rather than
+leaving it to hold a slot.
+
+`dispatchTask` returns `'handled' | 'at-capacity'` so `runTick` can walk the
+due candidates oldest first and stop at the first one a cap does not hold. A
+full repo therefore cannot starve a task routed at a repo with room. The pace
+is unchanged at one dispatch per tick.
+
+`runTick` passes `dispatchTask` a memoised reader, so each repo is read at most
+once per tick however many candidates the walk visits. Without it, a held cap
+would respawn `git worktree list` for every candidate against every rule path
+on every tick, forever, which is exactly the state the caps exist to create.
+One snapshot per tick also keeps a tick's decisions consistent with each other.
+`checkCapacity` calls `branches` once per repo path and documents that
+expectation.
+
+The global count is deliberately scoped to the rule paths, not to every repo
+`wt` has registered: a repo you registered once and abandoned with stale
+worktrees would otherwise block the daemon forever. Enforcement is daemon-only:
+`wt create` and `wt agent` ignore both caps, so you can always start a worktree
+by hand.
 
 ### A Todoist due date is a start date
 

@@ -16,6 +16,8 @@ import type { TodoistApi, TodoistTask } from './todoist.js';
 const config: AgentSpawnerConfig = {
   token: 't',
   pollIntervalSeconds: 600,
+  maxWorktrees: 0,
+  maxWorktreesPerRepo: {},
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '2183654821', working: '900001', error: '900002' },
@@ -185,6 +187,102 @@ describe('runTick', () => {
       await runTick(deps);
       expect(spawnAgent).toHaveBeenCalledTimes(1);
       expect(logged).toContain('Skipping 1 task(s) scheduled for later.');
+    });
+  });
+
+  describe('worktree caps', () => {
+    const twoRepos: AgentSpawnerConfig = {
+      ...config,
+      rules: [
+        { project: 'OVL', labels: ['2183895737'], path: '/repos/mobile' },
+        { project: 'OVL', labels: ['2183895740'], path: '/repos/backend' },
+      ],
+    };
+
+    it('dispatches a younger task when the oldest targets a full repo', async () => {
+      const tasks = [
+        makeTask({
+          id: 'old',
+          project_id: 'OVL',
+          added_at: '2025-01-01T00:00:00Z',
+          labels: ['Agent Ready', '📱 Overload Mobile'],
+        }),
+        makeTask({
+          id: 'new',
+          project_id: 'OVL',
+          added_at: '2025-02-01T00:00:00Z',
+          labels: ['Agent Ready', '💽 Overload Backend'],
+        }),
+      ];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const deps: TickDeps = {
+        api: api(tasks),
+        config: { ...twoRepos, maxWorktreesPerRepo: { '/repos/mobile': 1 } },
+        spawnAgent,
+        log: () => {},
+        listWorktreeBranches: (repoPath) =>
+          repoPath === '/repos/mobile' ? ['agent/held'] : [],
+      };
+      await runTick(deps);
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+      expect((spawnAgent.mock.calls[0] as unknown as string[])[0]).toContain(
+        '-new',
+      );
+    });
+
+    it('holds every task, and its labels, when the global cap is reached', async () => {
+      const tasks = [
+        makeTask({
+          id: 'a',
+          project_id: 'OVL',
+          labels: ['Agent Ready', '📱 Overload Mobile'],
+        }),
+        makeTask({
+          id: 'b',
+          project_id: 'OVL',
+          labels: ['Agent Ready', '💽 Overload Backend'],
+        }),
+      ];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const logged: string[] = [];
+      const tickApi = api(tasks);
+      const deps: TickDeps = {
+        api: tickApi,
+        config: { ...twoRepos, maxWorktrees: 2 },
+        spawnAgent,
+        log: (msg) => logged.push(msg),
+        listWorktreeBranches: () => ['agent/held'],
+      };
+      await runTick(deps);
+      expect(spawnAgent).not.toHaveBeenCalled();
+      expect(tickApi.updated).toEqual([]);
+      expect(logged.at(-1)).toBe(
+        'Every due task (2) targets a repo at its cap.',
+      );
+    });
+
+    it('counts each repo once per tick, however many candidates it walks', async () => {
+      const tasks = ['a', 'b', 'c'].map((id) =>
+        makeTask({
+          id,
+          project_id: 'OVL',
+          labels: ['Agent Ready', '📱 Overload Mobile'],
+        }),
+      );
+      const listWorktreeBranches = vi.fn(() => ['agent/held']);
+      const deps: TickDeps = {
+        api: api(tasks),
+        config: { ...twoRepos, maxWorktrees: 2 },
+        spawnAgent: vi.fn(async () => ({ ok: true, output: '' })),
+        log: () => {},
+        listWorktreeBranches,
+      };
+      await runTick(deps);
+      // Two rule paths, three held candidates: one read per path, not per task.
+      expect(listWorktreeBranches.mock.calls.flat().sort()).toEqual([
+        '/repos/backend',
+        '/repos/mobile',
+      ]);
     });
   });
 });

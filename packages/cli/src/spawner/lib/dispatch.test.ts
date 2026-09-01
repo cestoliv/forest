@@ -11,6 +11,8 @@ import type { TodoistApi, TodoistTask } from './todoist.js';
 const config: AgentSpawnerConfig = {
   token: 't',
   pollIntervalSeconds: 600,
+  maxWorktrees: 0,
+  maxWorktreesPerRepo: {},
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '2183654821', working: '900001', error: '900002' },
@@ -151,10 +153,54 @@ describe('dispatchTask', () => {
       labels: ['Agent Ready', '📱 Overload Mobile'],
     });
 
-    await expect(dispatchTask(task, d)).resolves.toBeUndefined();
+    await expect(dispatchTask(task, d)).resolves.toBe('handled');
 
     const errored = d.api.updated.at(-1);
     expect(errored?.labels).toContain('Agent Error');
     expect(d.api.comments.at(-1)?.content).toContain('kaboom');
+  });
+
+  it('at the cap: spawns nothing and leaves the labels alone for a later tick', async () => {
+    const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+    const logged: string[] = [];
+    const d = deps({
+      spawnAgent,
+      config: { ...config, maxWorktreesPerRepo: { '/repos/mobile': 2 } },
+      log: (msg) => logged.push(msg),
+      listWorktreeBranches: () => ['agent/other-1', 'agent/other-2'],
+    });
+
+    await expect(dispatchTask(mobileTask, d)).resolves.toBe('at-capacity');
+    expect(spawnAgent).not.toHaveBeenCalled();
+    expect(d.api.updated).toEqual([]);
+    expect(d.api.comments).toEqual([]);
+    expect(logged.at(-1)).toMatch(
+      /Holding task m1: \/repos\/mobile repo at cap/,
+    );
+  });
+
+  it('dispatches at the cap when the branch already has a worktree', async () => {
+    const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+    const d = deps({
+      spawnAgent,
+      config: { ...config, maxWorktreesPerRepo: { '/repos/mobile': 1 } },
+      // `wt agent` reuses this worktree, so dispatching adds none.
+      listWorktreeBranches: () => ['agent/mobile-crash-m1'],
+    });
+
+    await expect(dispatchTask(mobileTask, d)).resolves.toBe('handled');
+    expect(spawnAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('below the cap: dispatches as usual', async () => {
+    const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+    const d = deps({
+      spawnAgent,
+      config: { ...config, maxWorktrees: 3 },
+      listWorktreeBranches: () => ['agent/other-1'],
+    });
+
+    await expect(dispatchTask(mobileTask, d)).resolves.toBe('handled');
+    expect(spawnAgent).toHaveBeenCalledTimes(1);
   });
 });

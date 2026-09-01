@@ -339,6 +339,10 @@ A Todoist due date acts as a start date. A task with no due date is picked up
 on the next tick. A task due later waits until that moment passes, so you set
 a due date in the future to schedule work for a later day.
 
+Worktree caps hold work back too. Set `maxWorktrees` or `maxWorktreesPerRepo`
+(see Configuration) and the daemon stops dispatching once a repo is full,
+without labelling anything `Agent Error`.
+
 Installed by the same `npm install -g @cestoliv/forest` above.
 
 ```bash
@@ -363,6 +367,17 @@ Config essentials (`agent-spawner config --path` for the file location;
   `~`-expandable) local repo root to dispatch into. Optional `ide` (`zed` or
   `orca`) picks the launch target for that route; when omitted it falls back to
   `wt`'s configured `ide` default
+- **`maxWorktrees`** (default `0`) and **`maxWorktreesPerRepo`** (default `{}`)
+  — worktree caps. `maxWorktrees` counts every repo the `rules` point at
+  together; `maxWorktreesPerRepo` caps one repo, keyed by the same path a rule
+  uses (`~` is expanded). `0`, or an absent per-repo entry, means unlimited.
+  A worktree you created by hand counts too; one whose directory you deleted
+  does not. At a cap the daemon holds the task: it keeps `Agent Ready`, gets no
+  `Agent Error`, and a later tick dispatches it once you prune a worktree. A
+  task whose worktree already exists is never held, since running it adds none.
+  Only the daemon obeys the caps, so `wt create` and `wt agent` still work by
+  hand. A key that matches no `rules[].path` is a config error, so a typo can't
+  leave a cap that quietly does nothing
 - **`pollIntervalSeconds`** (default `600`) and **`promptTemplate`** (built
   with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, `{{projectId}}`
   placeholders) round out the poll loop and the prompt sent to `wt agent`

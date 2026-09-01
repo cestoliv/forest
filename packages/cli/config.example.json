@@ -8,6 +8,10 @@
     "working": "2184160737",
     "error": "2184160738"
   },
+  "maxWorktrees": 0,
+  "maxWorktreesPerRepo": {
+    "~/dev/overload-mobile": 2
+  },
   "rules": [
     {
       "project": "6cFvM833Wp4whXXW",
