@@ -225,8 +225,21 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   it's the one removed, a warning printed on return to the shell (via
   `warnIfCwdRemoved`) notes the current directory no longer exists. Only `main`
   is protected (`removeWorktree` hard-refuses it).
-- `wt config [--path]` → `src/wt/commands/config.ts` — opens the config file in `$EDITOR`, or prints the path with `--path`
+- `wt config [--path]` → `src/wt/commands/config.ts` — opens the config file in `$EDITOR` (beautifying it first, and exiting 1 if it's still invalid JSON on close), or prints the path with `--path`
 - `wt skill` → `src/wt/commands/skill.ts` — prints the bundled SKILL.md to stdout
+
+### Shared modules (`src/`)
+
+`src/config-file.ts` is the first module to live directly under `src/` rather
+than in either tool's tree — it owns the whole `config`/`config --path`
+editor lifecycle for both bins. `openConfigFile(configPath, commandName)` logs
+the path, beautifies the file (`formatConfigFile`), spawns `$EDITOR`, and on
+close either exits with the editor's own code (valid JSON) or prints the
+parse error and exits 1 (`readConfigParseError`). It deliberately imports
+neither `conf` nor either tool's config schema — it only knows a path and a
+label — which is what lets `wt`'s and the spawner's `commands/config.ts`
+(above, and `## agent-spawner` below) both collapse to a path resolver plus a
+call into this module.
 
 ### Library layer (`src/wt/lib/`)
 
@@ -321,7 +334,9 @@ here from its original README:
 - `agent-spawner run` — foreground (use this first to grant Accessibility)
 - `agent-spawner install` / `agent-spawner uninstall` — launchd auto-start on login
 - `agent-spawner logs` — tail the log
-- `agent-spawner config [--path]` — open config in `$EDITOR`, or print its path
+- `agent-spawner config [--path]` — open config in `$EDITOR` (seeding a
+  missing file with the defaults first, beautifying it, and exiting 1 if it's
+  still invalid JSON on close), or print its path
 
 Config: a Todoist API token (`TODOIST_API_TOKEN` env var or `token` in
 config), the three label ids (`ready`/`working`/`error`), the worktree caps

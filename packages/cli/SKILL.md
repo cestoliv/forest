@@ -209,7 +209,10 @@ CLI-only).
 
 ### `wt config`
 
-Open the global config file in `$EDITOR` (defaults to `nano`).
+Open the global config file in `$EDITOR` (defaults to `nano`). The file is
+rewritten tab-indented before the editor opens. If the JSON is still invalid
+when the editor closes, the parse error is printed and the command **exits
+1** so you know to reopen and fix it.
 
 ```bash
 wt config          # open in editor
