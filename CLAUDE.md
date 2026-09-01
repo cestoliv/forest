@@ -50,7 +50,9 @@ release pipeline (see below) and is not installed by `npm install -g
   under `latest` via OIDC trusted publishing (skipped if that version already
   exists — bump `version` to release). Adding the `publish-dev` label to a PR
   publishes a throwaway pinned prerelease (`X.Y.Z-pr<N>.g<sha>`) under a
-  `pr-<N>` dist-tag and comments the install command on the PR.
+  `pr-<N>` dist-tag and comments the install command on the PR. **Always bump
+  `packages/cli/package.json` version in the PR that changes `packages/cli/**`.**
+  Without a bump, the merge publishes nothing and the change never reaches npm.
 - **`apps/ide-toggler`** — tagged independently, `ide-toggler-v*` (e.g.
   `ide-toggler-v1.2.0`). `.github/workflows/release-ide-toggler.yml` builds and
   tests the GNOME extension, injects the version from the tag, packages it as
@@ -95,3 +97,5 @@ release pipeline (see below) and is not installed by `npm install -g
   that changed (see Release model above).
 - Never commit directly to `main`; changes land via PR (see the user's global
   git workflow rules).
+- Before you merge a PR touching `packages/cli/**`, check that it bumps the
+  package version (see Release model).
