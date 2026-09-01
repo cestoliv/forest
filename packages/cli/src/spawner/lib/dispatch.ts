@@ -22,6 +22,8 @@ export interface DispatchDeps {
   log: (msg: string) => void;
   /** Injected worktree reader for tests; production omits it. */
   listWorktreeBranches?: (repoPath: string) => string[];
+  /** Extra worktree slots the usage gate grants this tick (pre-reset only). */
+  capBonus?: number;
 }
 
 /**
@@ -60,7 +62,13 @@ export async function dispatchTask(
 
   // Undefined falls through to `checkCapacity`'s own default, so there is one
   // fallback rather than one here and one there.
-  const full = checkCapacity(config, path, branch, deps.listWorktreeBranches);
+  const full = checkCapacity(
+    config,
+    path,
+    branch,
+    deps.listWorktreeBranches,
+    deps.capBonus,
+  );
   if (full) {
     // Leave every label alone. The task stays "Agent Ready" and a later tick
     // picks it up once a worktree is pruned, so a cap defers work, never fails

@@ -6,6 +6,12 @@ import { type AgentSpawnerConfig, DEFAULT_CONFIG } from './config.js';
 import { dispatchTask, type SpawnAgent } from './dispatch.js';
 import { isDue } from './due.js';
 import type { TodoistApi } from './todoist.js';
+import {
+  checkUsage,
+  fetchUsage,
+  type UsageSnapshot,
+  type UsageVerdict,
+} from './usage.js';
 
 export interface TickDeps {
   api: TodoistApi;
@@ -14,6 +20,8 @@ export interface TickDeps {
   log: (msg: string) => void;
   /** Injected worktree reader for tests; production omits it. */
   listWorktreeBranches?: (repoPath: string) => string[];
+  /** Injected usage reader for tests; production omits it. */
+  fetchUsage?: () => Promise<UsageSnapshot | null>;
 }
 
 export async function runTick(deps: TickDeps): Promise<void> {
@@ -53,6 +61,20 @@ export async function runTick(deps: TickDeps): Promise<void> {
     log(`Skipping ${deferred} task(s) scheduled for later.`);
   }
 
+  // Ask about the usage only once a dispatch is imminent, so an idle daemon
+  // makes no network call at all. One snapshot serves the whole tick, which
+  // dispatches at most one task anyway.
+  const verdict = config.usage.enabled
+    ? await weighUsage(deps, now)
+    : { hold: null, capBonus: 0 };
+  if (verdict.hold) {
+    // Touch no labels: every task keeps "Agent Ready" and a later tick picks it
+    // up, exactly like a worktree cap. The usage gate defers work, never fails
+    // it.
+    log(`Holding every task: ${verdict.hold}.`);
+    return;
+  }
+
   // Read each repo's worktrees at most once per tick. Walking the candidates
   // would otherwise respawn `git worktree list` for every task against every
   // rule path, on every tick, for as long as a cap holds. One snapshot also
@@ -83,11 +105,28 @@ export async function runTick(deps: TickDeps): Promise<void> {
       spawnAgent,
       log,
       listWorktreeBranches: readOnce,
+      capBonus: verdict.capBonus,
     });
     if (outcome !== 'at-capacity') return;
   }
 
   log(`Every due task (${candidates.length}) targets a repo at its cap.`);
+}
+
+/**
+ * The usage gate's verdict for this tick. Usage the daemon cannot measure (no
+ * Claude credentials, a refused or failed request) opens the gate: an expired
+ * token must not freeze the daemon for good, and the agent it dispatches
+ * surfaces a real rate limit as an "Agent Error" the same way any other failure
+ * does.
+ */
+async function weighUsage(deps: TickDeps, now: Date): Promise<UsageVerdict> {
+  const usage = await (deps.fetchUsage ?? fetchUsage)();
+  if (usage === null) {
+    deps.log('Usage unknown, dispatching anyway.');
+    return { hold: null, capBonus: 0 };
+  }
+  return checkUsage(deps.config, usage, now);
 }
 
 export function defaultLockPath(): string {

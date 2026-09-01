@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { checkCapacity, listWorktreeBranches } from './capacity.js';
-import type { AgentSpawnerConfig } from './config.js';
+import { type AgentSpawnerConfig, DEFAULT_CONFIG } from './config.js';
 
 const base: AgentSpawnerConfig = {
   token: 't',
@@ -14,6 +14,8 @@ const base: AgentSpawnerConfig = {
   labels: { ready: '1', working: '2', error: '3' },
   maxWorktrees: 0,
   maxWorktreesPerRepo: {},
+  // The usage gate is off, so these cases make no network call.
+  usage: { ...DEFAULT_CONFIG.usage, enabled: false },
   rules: [
     { project: 'OVL', path: '/repos/mobile' },
     { project: 'OVL', path: '/repos/backend' },
@@ -157,6 +159,36 @@ describe('checkCapacity', () => {
     expect(
       checkCapacity(config, '/repos/mobile', 'agent/fresh-m2', worktrees),
     ).toMatch(/repo at cap/);
+  });
+
+  it('raises both caps by the bonus', () => {
+    const config = {
+      ...base,
+      maxWorktrees: 2,
+      maxWorktreesPerRepo: { '/repos/mobile': 1 },
+    };
+    const worktrees = held({ '/repos/mobile': 1, '/repos/backend': 1 });
+    expect(
+      checkCapacity(config, '/repos/mobile', 'agent/new', worktrees),
+    ).toMatch(/repo at cap/);
+    expect(
+      checkCapacity(config, '/repos/mobile', 'agent/new', worktrees, 2),
+    ).toBeNull();
+  });
+
+  it('reports the raised cap it still holds on', () => {
+    const config = { ...base, maxWorktrees: 2 };
+    const worktrees = held({ '/repos/mobile': 4 });
+    expect(
+      checkCapacity(config, '/repos/mobile', 'agent/new', worktrees, 2),
+    ).toMatch(/global cap reached \(4\/4\)/);
+  });
+
+  it('leaves an unlimited cap unlimited under a bonus', () => {
+    const worktrees = held({ '/repos/mobile': 99 });
+    expect(
+      checkCapacity(base, '/repos/mobile', 'agent/new', worktrees, 2),
+    ).toBeNull();
   });
 
   it('reports the repo cap first when both are reached', () => {

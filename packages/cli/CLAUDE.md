@@ -340,7 +340,8 @@ here from its original README:
 
 Config: a Todoist API token (`TODOIST_API_TOKEN` env var or `token` in
 config), the three label ids (`ready`/`working`/`error`), the worktree caps
-(`maxWorktrees`/`maxWorktreesPerRepo`, see "Worktree caps"), and ordered routing
+(`maxWorktrees`/`maxWorktreesPerRepo`, see "Worktree caps"), the usage gate
+(`usage`, see "The usage gate"), and ordered routing
 `rules` (project + optional label ids → repo path, plus an optional per-route
 `ide`; first match wins, see `src/spawner/lib/router.ts`).
 `packages/cli/config.example.json` has a starting point. `resolveRoute` returns
@@ -430,6 +431,73 @@ The global count is deliberately scoped to the rule paths, not to every repo
 worktrees would otherwise block the daemon forever. Enforcement is daemon-only:
 `wt create` and `wt agent` ignore both caps, so you can always start a worktree
 by hand.
+
+### The usage gate
+
+`src/spawner/lib/usage.ts` holds every task back when your Claude subscription
+has no room left to spend. Two functions: `fetchUsage` measures, `checkUsage`
+decides. `runTick` calls both once per tick, after it picks the due candidates
+and before it walks them, so an idle daemon makes no network call at all.
+
+`fetchUsage` reads `https://api.anthropic.com/api/oauth/usage`, the endpoint
+Claude Code's own `/usage` reads, with the OAuth access token Claude Code
+stores: the macOS Keychain (`security find-generic-password -s "Claude
+Code-credentials"`) first, `$CLAUDE_CONFIG_DIR/.credentials.json` (or
+`~/.claude/.credentials.json`) second. It maps `seven_day` and `five_hour` onto
+a `UsageSnapshot` of percentages, so the daemon never needs to know how many
+tokens a plan grants, and never needs a calibrated token cap. `expiresAt` on
+the stored credential is ignored: the endpoint is the authority on whether a
+token still works.
+
+Every failure returns null, which callers read as an open gate: no credentials,
+a refused request, a timeout, a payload with no weekly window. An expired token
+must not freeze the daemon for good, and a real rate limit still surfaces as an
+`Agent Error` through the agent the daemon dispatched. `weighUsage` logs
+`Usage unknown, dispatching anyway.` so the log says which regime a tick ran
+under.
+
+`checkUsage` is pure and takes `now`, so the night window and the morning guard
+read local time and tests stay deterministic. It returns
+`{ hold, capBonus }`:
+
+- **The decreasing reserve.** `dailyReservePercent × daysToReset` is protected
+  for your own interactive work, and a task is held when
+  `100 - weeklyPercent - reserve` drops to zero. Early in the week the reserve
+  covers several heavy days, so the daemon is conservative. The evening before
+  the reset it covers almost nothing, so the daemon is aggressive. No ramp-up
+  curve, no hard-coded thresholds, two lines of arithmetic.
+- **The 5h ceiling.** `sessionPercent >= sessionMaxPercent` holds the task, so
+  an agent cannot eat the window you are working in. The weekly reserve is
+  reported first, being the strategic one.
+- **The night regime.** `usage.night` (or `null` for one regime all day)
+  overrides both thresholds for the local hours you are asleep. `hours` is
+  `[start, end)` and wraps midnight when its end is at or before its start. On
+  top, the morning guard: a night dispatch is held when the 5h window would
+  still be open at `morningGuardHour`, measured from `five_hour.resets_at` when
+  a window is already open (its reset still ahead) and from `now + 5h` when
+  none is. Without slices (see below) one night agent can own a whole window,
+  so this is what keeps the window you wake up into free. The guard, not
+  `hours`, is what ends the night in practice: with `[2, 6]` and a guard of
+  `8`, a window opened after 03:00 would run past 08:00, so dispatches stop
+  there. Raise `morningGuardHour` to lengthen the night.
+- **The pre-reset window.** Inside `preResetHours` of the reset, what the
+  reserve holds back is lost rather than saved, so the reserve and the 5h
+  ceiling both drop and only `weeklyPercent >= 100` holds. This is also the
+  only path that returns a non-zero `capBonus`
+  (`preResetBonusWorktrees`), which `runTick` threads through `dispatchTask`
+  into `checkCapacity`'s `bonus` argument, raising **both** caps. Those
+  worktrees outlive the reset, so the repo sits over its cap until you prune.
+
+A hold touches no labels and logs `Holding every task: <reason>.`, exactly like
+a worktree cap: the usage gate defers work, it never fails it.
+
+Deliberately not taken from the design this follows (a "decreasing reserve"
+controller built on `ccusage`): time-sliced sessions, a budget-driven
+parallelism dial, model polarization, and a learned cost ledger. `wt agent`
+runs an agent to completion with no wall clock and no resume point, so there is
+no slice to bound. The width dial is already the worktree caps, and the tick
+loop regulates it: one dispatch per tick, and the agent it just started shows
+up in `five_hour.utilization` within minutes, closing the gate on the next one.
 
 ### A Todoist due date is a start date
 

@@ -50,12 +50,16 @@ export function listWorktreeBranches(repoPath: string): string[] {
  *
  * `branches` is called once per repo path, so pass a memoised reader when one
  * tick asks about several tasks (`runTick` does).
+ *
+ * `bonus` raises both caps, and comes from the usage gate: in the hours before
+ * the weekly reset, what the caps hold back is lost rather than saved.
  */
 export function checkCapacity(
   config: AgentSpawnerConfig,
   repoPath: string,
   branch: string,
   branches: (repoPath: string) => string[] = listWorktreeBranches,
+  bonus = 0,
 ): string | null {
   const here = branches(repoPath);
   // A branch that already has a worktree adds none: `wt agent` reuses it (see
@@ -70,15 +74,16 @@ export function checkCapacity(
   if (here.includes(branch)) return null;
 
   const repoCap = config.maxWorktreesPerRepo[repoPath] ?? 0;
-  if (repoCap > 0 && here.length >= repoCap) {
-    return `repo at cap (${here.length}/${repoCap})`;
+  if (repoCap > 0 && here.length >= repoCap + bonus) {
+    return `repo at cap (${here.length}/${repoCap + bonus})`;
   }
 
   if (config.maxWorktrees > 0) {
+    const globalCap = config.maxWorktrees + bonus;
     const paths = [...new Set(config.rules.map((rule) => rule.path))];
     const used = paths.reduce((total, p) => total + branches(p).length, 0);
-    if (used >= config.maxWorktrees) {
-      return `global cap reached (${used}/${config.maxWorktrees})`;
+    if (used >= globalCap) {
+      return `global cap reached (${used}/${globalCap})`;
     }
   }
 
