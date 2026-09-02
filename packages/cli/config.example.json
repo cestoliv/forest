@@ -16,7 +16,8 @@
     {
       "project": "6cFvM833Wp4whXXW",
       "labels": ["2183895737"],
-      "path": "~/dev/overload-mobile"
+      "path": "~/dev/overload-mobile",
+      "promptTemplate": "Use the auto-factory skill on this task {{url}}"
     },
     {
       "project": "6cFvM833Wp4whXXW",

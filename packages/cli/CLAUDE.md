@@ -351,8 +351,11 @@ a `RouteRule` with no `ide` (or a blank one, which `loadConfig` normalises to
 `createAgentWorktree`'s `options.ide ?? config.ide`. Every `pollIntervalSeconds` (default 600) it fetches `Agent
 Ready` tasks, drops the ones already Working/Error or due later, picks the
 oldest of the rest, resolves a repo via the rules, and dispatches. The prompt
-sent to `wt agent` is built from `promptTemplate` with `{{url}}`, `{{title}}`,
-`{{id}}`, `{{description}}`, and `{{projectId}}` placeholders.
+sent to `wt agent` is built from `rule.promptTemplate ?? config.promptTemplate`
+with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, and `{{projectId}}`
+placeholders, so one route can open its agent differently from the rest.
+`loadConfig` normalises a blank per-rule template to `undefined`, which falls
+back to the global one.
 
 ### Worktree caps
 
