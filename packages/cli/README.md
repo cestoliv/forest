@@ -45,6 +45,7 @@ wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macO
 wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of the default
 wt agent big-job "Plan it" --model fable  # Bigger model for one run
 wt prune                                  # Remove merged worktrees (per-branch confirm)
+wt count                                  # Count worktrees, total and per repo
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
 ```
@@ -258,6 +259,26 @@ is skipped (with a note) rather than failing the prune when it can't pull:
 
 Pass `--no-pull` to skip this entirely. The TUI `P` key **always** auto-pulls
 (there is no TUI opt-out; `--no-pull` is CLI-only).
+
+## Count — `wt count`
+
+```bash
+wt count
+```
+
+Prints the total number of worktrees across every registered repo, plus a
+per-repo breakdown, sorted by count (descending, then by repo name):
+
+```
+Total: 4 worktrees
+
+  forest     2
+  overload   1
+  website    1
+```
+
+The main checkout of each repo doesn't count — only linked worktrees do. Every
+registered repo gets a row, even one with no linked worktrees (`0`).
 
 ## Configuration
 
