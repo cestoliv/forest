@@ -9,6 +9,9 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.test.ts'],
+    // The e2e tests shell out to real git (clone, worktree add). Those run
+    // past the 5s default under full-suite load, so they fail at random.
+    testTimeout: 30000,
     pool: 'forks',
     poolOptions: {
       forks: {

@@ -112,6 +112,29 @@ describe('dispatchTask', () => {
     );
   });
 
+  it("renders the matched rule's promptTemplate instead of the global one", async () => {
+    const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+    const ruleConfig: AgentSpawnerConfig = {
+      ...config,
+      rules: [
+        {
+          project: 'OVL',
+          labels: ['2183895737'],
+          path: '/repos/mobile',
+          promptTemplate: 'Use the auto-factory skill on {{url}}',
+        },
+      ],
+    };
+    const d = deps({ spawnAgent, config: ruleConfig });
+    await dispatchTask(mobileTask, d);
+    expect(spawnAgent).toHaveBeenCalledWith(
+      'agent/mobile-crash-m1',
+      'Use the auto-factory skill on https://app.todoist.com/app/task/m1',
+      '/repos/mobile',
+      undefined,
+    );
+  });
+
   it('on no route: adds Error label + comment, keeps Ready', async () => {
     const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
     const task = makeTask({

@@ -12,6 +12,11 @@ export interface RouteRule {
    * the dispatch falls back to `wt`'s configured `ide` default.
    */
   ide?: string;
+  /**
+   * Prompt template for this route. When unset, the dispatch falls back to the
+   * global `promptTemplate`.
+   */
+  promptTemplate?: string;
 }
 
 export interface LabelConfig {
@@ -105,7 +110,10 @@ export function loadConfig(
     // Drop a blank `ide` so it falls back to wt's default (a falsy-but-defined
     // string would otherwise survive wt's `options.ide ?? config.ide`).
     const ide = rule.ide?.trim() ? rule.ide.trim() : undefined;
-    return { ...rule, path: expandHome(rule.path), ide };
+    // A blank per-rule template would render an empty prompt, so treat it the
+    // same as an absent one and fall back to the global template.
+    const promptTemplate = readRuleTemplate(rule.promptTemplate, i);
+    return { ...rule, path: expandHome(rule.path), ide, promptTemplate };
   });
 
   const pollIntervalSeconds =
@@ -171,4 +179,17 @@ function readCap(value: number | undefined, key: string): number {
     );
   }
   return cap;
+}
+
+function readRuleTemplate(
+  value: string | undefined,
+  i: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(
+      `Invalid rule at index ${i}: promptTemplate must be a string.`,
+    );
+  }
+  return value.trim() ? value : undefined;
 }
