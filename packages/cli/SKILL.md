@@ -207,6 +207,25 @@ remote, or the fast-forward fails (message surfaced, pull manually). Pass
 `--no-pull` to skip it; the TUI `p` key **always** auto-pulls (`--no-pull` is
 CLI-only).
 
+### `wt count`
+
+Print the total number of worktrees across every registered repo, plus a
+per-repo breakdown (sorted by count descending, then repo name). Only linked
+worktrees count — each repo's main checkout doesn't. Every registered repo gets
+a row, including one with zero linked worktrees.
+
+```bash
+wt count
+```
+
+```
+Total: 4 worktrees
+
+  forest     2
+  overload   1
+  website    1
+```
+
 ### `wt config`
 
 Open the global config file in `$EDITOR` (defaults to `nano`). The file is

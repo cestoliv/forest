@@ -289,7 +289,7 @@ describe('removeWorktree', () => {
     expect(existsSync(wtPath)).toBe(false);
     const worktrees = listWorktrees(repoDir, repoDir);
     expect(worktrees.find((w) => w.branch === 'with-sub')).toBeUndefined();
-  }, 15000);
+  });
 });
 
 describe('listWorktreeDirtyFiles', () => {
