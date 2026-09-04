@@ -351,6 +351,34 @@ keeps a decreasing reserve for your own interactive work: early in the week it
 protects several days of it, the evening before the reset almost none. See
 `usage` in Configuration.
 
+What one tick decides:
+
+```mermaid
+flowchart LR
+    tick([Tick]) --> due{"Any Agent Ready<br/>task due?"}
+    due -- no --> wait([Wait for the next tick])
+    due -- yes --> known{"Gate on and<br/>usage measured?"}
+    known -- yes --> pre{"Inside preResetHours<br/>of the reset?"}
+    pre -- yes --> spent{"Weekly limit<br/>fully spent?"}
+    spent -- yes --> hold
+    spent -- no --> bonus["Raise both caps by<br/>preResetBonusWorktrees"]
+    bonus --> caps
+    pre -- no --> reserve{"weeklyUsed + reserve < 100%?<br/>reserve = dailyReservePercent<br/>× days to the reset"}
+    reserve -- no --> hold
+    reserve -- yes --> ceiling{"5h window under<br/>sessionMaxPercent?"}
+    ceiling -- no --> hold
+    ceiling -- yes --> guard{"Night: 5h window free<br/>by morningGuardHour?"}
+    guard -- no --> hold([Hold: keep Agent Ready,<br/>log the reason])
+    guard -- yes --> caps{"Worktree caps<br/>have room?"}
+    known -- "no: off, no token,<br/>request failed" --> caps
+    caps -- no --> hold
+    caps -- yes --> spawn([Dispatch one task])
+```
+
+Inside `night.hours` the `night` block replaces `dailyReservePercent` and
+`sessionMaxPercent`, and adds the morning guard. The rest of the flow is the
+same at every hour.
+
 Installed by the same `npm install -g @cestoliv/forest` above.
 
 ```bash
