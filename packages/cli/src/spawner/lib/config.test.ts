@@ -25,6 +25,8 @@ const valid: AgentSpawnerConfig = {
   pollIntervalSeconds: 600,
   maxWorktrees: 0,
   maxWorktreesPerRepo: {},
+  // The usage gate is off, so these cases make no network call.
+  usage: { ...DEFAULT_CONFIG.usage, enabled: false },
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '1', working: '2', error: '3' },
@@ -231,6 +233,112 @@ describe('loadConfig', () => {
         maxWorktreesPerRepo: { '~/dev/repo': '2' as unknown as number },
       };
       expect(() => loadConfig(store)).toThrow(/~\/dev\/repo/);
+    });
+  });
+
+  describe('usage gate', () => {
+    it('fills in every field a partial usage block leaves out', () => {
+      const store = tmpStore();
+      // Conf merges its defaults per top-level key, so half a usage block
+      // would otherwise arrive with the rest undefined.
+      store.store = {
+        ...valid,
+        usage: { enabled: false } as unknown as AgentSpawnerConfig['usage'],
+      };
+      const cfg = loadConfig(store);
+      expect(cfg.usage).toEqual({ ...DEFAULT_CONFIG.usage, enabled: false });
+    });
+
+    it('fills in every field a partial night block leaves out', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: {
+          ...DEFAULT_CONFIG.usage,
+          night: { hours: [1, 5] },
+        } as unknown as AgentSpawnerConfig['usage'],
+      };
+      expect(loadConfig(store).usage.night).toEqual({
+        ...DEFAULT_CONFIG.usage.night,
+        hours: [1, 5],
+      });
+    });
+
+    it('keeps one regime all day when night is null', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: { ...DEFAULT_CONFIG.usage, night: null },
+      };
+      expect(loadConfig(store).usage.night).toBeNull();
+    });
+
+    it('throws when a percentage is out of range', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: { ...DEFAULT_CONFIG.usage, dailyReservePercent: 101 },
+      };
+      expect(() => loadConfig(store)).toThrow(/usage\.dailyReservePercent/);
+    });
+
+    it('throws when a night percentage is out of range, naming the night', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: {
+          ...DEFAULT_CONFIG.usage,
+          night: { ...DEFAULT_CONFIG.usage.night, sessionMaxPercent: -1 },
+        } as unknown as AgentSpawnerConfig['usage'],
+      };
+      expect(() => loadConfig(store)).toThrow(
+        /usage\.night\.sessionMaxPercent/,
+      );
+    });
+
+    it('throws when the night window is not two hours', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: {
+          ...DEFAULT_CONFIG.usage,
+          night: { ...DEFAULT_CONFIG.usage.night, hours: [2] },
+        } as unknown as AgentSpawnerConfig['usage'],
+      };
+      expect(() => loadConfig(store)).toThrow(/usage\.night\.hours/);
+    });
+
+    it('throws when an hour is outside the clock', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: {
+          ...DEFAULT_CONFIG.usage,
+          night: { ...DEFAULT_CONFIG.usage.night, morningGuardHour: 25 },
+        } as unknown as AgentSpawnerConfig['usage'],
+      };
+      expect(() => loadConfig(store)).toThrow(/usage\.night\.morningGuardHour/);
+    });
+
+    it('throws when the pre-reset bonus is not a whole number', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: { ...DEFAULT_CONFIG.usage, preResetBonusWorktrees: 1.5 },
+      };
+      expect(() => loadConfig(store)).toThrow(/preResetBonusWorktrees/);
+    });
+
+    it('throws when enabled is not a boolean', () => {
+      const store = tmpStore();
+      store.store = {
+        ...valid,
+        usage: {
+          ...DEFAULT_CONFIG.usage,
+          enabled: 'yes',
+        } as unknown as AgentSpawnerConfig['usage'],
+      };
+      expect(() => loadConfig(store)).toThrow(/usage\.enabled/);
     });
   });
 });

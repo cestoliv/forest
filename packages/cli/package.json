@@ -1,6 +1,6 @@
 {
   "name": "@cestoliv/forest",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "wt (git worktrees + AI agents) and agent-spawner (Todoist daemon) in one package.",
   "repository": {
     "type": "git",

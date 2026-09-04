@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FIXTURE_LABELS, makeTask } from '../test-utils.js';
-import type { AgentSpawnerConfig } from './config.js';
+import { type AgentSpawnerConfig, DEFAULT_CONFIG } from './config.js';
 import {
   type DispatchDeps,
   dispatchTask,
@@ -13,6 +13,8 @@ const config: AgentSpawnerConfig = {
   pollIntervalSeconds: 600,
   maxWorktrees: 0,
   maxWorktreesPerRepo: {},
+  // The usage gate is off, so these cases make no network call.
+  usage: { ...DEFAULT_CONFIG.usage, enabled: false },
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '2183654821', working: '900001', error: '900002' },

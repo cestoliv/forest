@@ -366,6 +366,40 @@ Worktree caps hold work back too. Set `maxWorktrees` or `maxWorktreesPerRepo`
 (see Configuration) and the daemon stops dispatching once a repo is full,
 without labelling anything `Agent Error`.
 
+Your Claude usage holds work back as well. Before each dispatch the daemon
+reads the weekly and 5h rate-limit windows of your Claude subscription and
+keeps a decreasing reserve for your own interactive work: early in the week it
+protects several days of it, the evening before the reset almost none. See
+`usage` in Configuration.
+
+What one tick decides:
+
+```mermaid
+flowchart LR
+    tick([Tick]) --> due{"Any Agent Ready<br/>task due?"}
+    due -- no --> wait([Wait for the next tick])
+    due -- yes --> known{"Gate on and<br/>usage measured?"}
+    known -- yes --> pre{"Inside preResetHours<br/>of the reset?"}
+    pre -- yes --> spent{"Weekly limit<br/>fully spent?"}
+    spent -- yes --> hold
+    spent -- no --> bonus["Raise both caps by<br/>preResetBonusWorktrees"]
+    bonus --> caps
+    pre -- no --> reserve{"weeklyUsed + reserve < 100%?<br/>reserve = dailyReservePercent<br/>× days to the reset"}
+    reserve -- no --> hold
+    reserve -- yes --> ceiling{"5h window under<br/>sessionMaxPercent?"}
+    ceiling -- no --> hold
+    ceiling -- yes --> guard{"Night: 5h window free<br/>by morningGuardHour?"}
+    guard -- no --> hold([Hold: keep Agent Ready,<br/>log the reason])
+    guard -- yes --> caps{"Worktree caps<br/>have room?"}
+    known -- "no: off, no token,<br/>request failed" --> caps
+    caps -- no --> hold
+    caps -- yes --> spawn([Dispatch one task])
+```
+
+Inside `night.hours` the `night` block replaces `dailyReservePercent` and
+`sessionMaxPercent`, and adds the morning guard. The rest of the flow is the
+same at every hour.
+
 Installed by the same `npm install -g @cestoliv/forest` above.
 
 ```bash
@@ -407,6 +441,38 @@ beautified on open, and an invalid JSON edit prints the parse error and exits
   Only the daemon obeys the caps, so `wt create` and `wt agent` still work by
   hand. A key that matches no `rules[].path` is a config error, so a typo can't
   leave a cap that quietly does nothing
+- **`usage`** — the usage gate, on by default. Before each dispatch the daemon
+  reads `https://api.anthropic.com/api/oauth/usage` with the OAuth token Claude
+  Code stores (macOS Keychain first, `~/.claude/.credentials.json` second), the
+  same numbers Claude Code's `/usage` shows. Usage it cannot measure (no
+  credentials, a refused or failed request) opens the gate, so an expired token
+  never freezes the daemon. Fields:
+  - **`enabled`** (default `true`) — `false` skips the read entirely
+  - **`dailyReservePercent`** (default `13`) — percent of the weekly limit to
+    reserve per day left before the reset. The daemon holds a task when
+    `100 - weeklyUsed - dailyReservePercent × daysToReset` drops to zero, so it
+    is conservative early in the week and aggressive the evening before the
+    reset, with no ramp-up curve to tune. `13` is one heavy interactive day on
+    a Max plan
+  - **`sessionMaxPercent`** (default `50`) — utilization of the 5h window above
+    which the daemon stops dispatching, so an agent cannot eat the window
+    you're working in
+  - **`preResetHours`** (default `8`) — the last hours of the week, where what
+    the reserve holds back would be lost rather than saved. The reserve and the
+    5h ceiling both drop, leaving `100 - weeklyUsed`
+  - **`preResetBonusWorktrees`** (default `2`) — worktrees allowed over **both**
+    caps during those hours. They outlive the reset, so the repo stays over its
+    cap until you prune
+  - **`night`** (default `{ "hours": [2, 6], "dailyReservePercent": 4,
+    "sessionMaxPercent": 90, "morningGuardHour": 8 }`, or `null` for one regime
+    all day) — overrides for the local hours you're asleep, plus a morning
+    guard: a night dispatch whose 5h window would still be open at
+    `morningGuardHour` is held, so it cannot eat the window you wake up into.
+    An `hours` end at or before its start wraps midnight. The guard, not
+    `hours`, is what ends the night in practice: with `[2, 6]` and a guard of
+    `8`, a window opened after 03:00 would run past 08:00, so dispatches stop
+    there. Raise `morningGuardHour` to lengthen the night. The night regime
+    only fires if the machine is awake then, which is a `pmset` matter
 - **`pollIntervalSeconds`** (default `600`) and **`promptTemplate`** (built
   with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, `{{projectId}}`
   placeholders) round out the poll loop and the prompt sent to `wt agent`

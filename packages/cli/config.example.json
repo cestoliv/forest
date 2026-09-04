@@ -12,6 +12,19 @@
   "maxWorktreesPerRepo": {
     "~/dev/overload-mobile": 2
   },
+  "usage": {
+    "enabled": true,
+    "dailyReservePercent": 13,
+    "sessionMaxPercent": 50,
+    "preResetHours": 8,
+    "preResetBonusWorktrees": 2,
+    "night": {
+      "hours": [2, 6],
+      "dailyReservePercent": 4,
+      "sessionMaxPercent": 90,
+      "morningGuardHour": 8
+    }
+  },
   "rules": [
     {
       "project": "6cFvM833Wp4whXXW",

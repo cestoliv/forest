@@ -2,7 +2,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { FIXTURE_LABELS, makeTask } from '../test-utils.js';
-import type { AgentSpawnerConfig } from './config.js';
+import { type AgentSpawnerConfig, DEFAULT_CONFIG } from './config.js';
 import {
   acquireLock,
   type LoopDeps,
@@ -12,12 +12,15 @@ import {
   type TickDeps,
 } from './loop.js';
 import type { TodoistApi, TodoistTask } from './todoist.js';
+import type { UsageSnapshot } from './usage.js';
 
 const config: AgentSpawnerConfig = {
   token: 't',
   pollIntervalSeconds: 600,
   maxWorktrees: 0,
   maxWorktreesPerRepo: {},
+  // The usage gate is off, so these cases make no network call.
+  usage: { ...DEFAULT_CONFIG.usage, enabled: false },
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '2183654821', working: '900001', error: '900002' },
@@ -283,6 +286,127 @@ describe('runTick', () => {
         '/repos/backend',
         '/repos/mobile',
       ]);
+    });
+  });
+
+  describe('usage gate', () => {
+    // `night: null` keeps every case independent of the hour the suite runs at.
+    const gated: AgentSpawnerConfig = {
+      ...config,
+      usage: { ...DEFAULT_CONFIG.usage, enabled: true, night: null },
+    };
+
+    /** A snapshot whose weekly window resets `hours` from now. */
+    const usage = (
+      weeklyPercent: number,
+      hours: number,
+    ): (() => Promise<UsageSnapshot>) => {
+      return async () => ({
+        weeklyPercent,
+        weeklyResetsAt: Date.now() + hours * 3_600_000,
+        sessionPercent: 0,
+        sessionResetsAt: null,
+      });
+    };
+
+    it('holds every task, and its labels, when the reserve leaves no room', async () => {
+      const tasks = [makeTask({ id: 'a', project_id: 'OVL' })];
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const logged: string[] = [];
+      const tickApi = api(tasks);
+      await runTick({
+        api: tickApi,
+        config: gated,
+        spawnAgent,
+        log: (msg) => logged.push(msg),
+        fetchUsage: usage(50, 96),
+      });
+      expect(spawnAgent).not.toHaveBeenCalled();
+      expect(tickApi.updated).toEqual([]);
+      expect(logged.at(-1)).toMatch(/Holding every task: weekly reserve holds/);
+    });
+
+    it('dispatches when the reserve leaves room', async () => {
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      await runTick({
+        api: api([makeTask({ id: 'a', project_id: 'OVL' })]),
+        config: gated,
+        spawnAgent,
+        log: () => {},
+        fetchUsage: usage(10, 96),
+      });
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+    });
+
+    it('dispatches when the usage cannot be measured', async () => {
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const logged: string[] = [];
+      await runTick({
+        api: api([makeTask({ id: 'a', project_id: 'OVL' })]),
+        config: gated,
+        spawnAgent,
+        log: (msg) => logged.push(msg),
+        fetchUsage: async () => null,
+      });
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+      expect(logged).toContain('Usage unknown, dispatching anyway.');
+    });
+
+    it('asks nothing when the gate is off', async () => {
+      const fetchUsage = vi.fn(async () => null);
+      await runTick({
+        api: api([makeTask({ id: 'a', project_id: 'OVL' })]),
+        config,
+        spawnAgent: vi.fn(async () => ({ ok: true, output: '' })),
+        log: () => {},
+        fetchUsage,
+      });
+      expect(fetchUsage).not.toHaveBeenCalled();
+    });
+
+    it('asks nothing when no task is due', async () => {
+      const fetchUsage = vi.fn(async () => null);
+      await runTick({
+        api: api([
+          makeTask({ id: 'a', project_id: 'OVL', due: { date: '2099-01-01' } }),
+        ]),
+        config: gated,
+        spawnAgent: vi.fn(async () => ({ ok: true, output: '' })),
+        log: () => {},
+        fetchUsage,
+      });
+      expect(fetchUsage).not.toHaveBeenCalled();
+    });
+
+    it('spends the cap bonus before the reset', async () => {
+      const capped: AgentSpawnerConfig = {
+        ...gated,
+        maxWorktrees: 1,
+        maxWorktreesPerRepo: { '/repos/ovl': 1 },
+      };
+      const spawnAgent = vi.fn(async () => ({ ok: true, output: '' }));
+      const deps: TickDeps = {
+        api: api([makeTask({ id: 'a', project_id: 'OVL' })]),
+        config: capped,
+        spawnAgent,
+        log: () => {},
+        listWorktreeBranches: () => ['agent/held'],
+        // 4 hours to the reset, so the bonus applies: what the cap holds back
+        // now is lost at the reset.
+        fetchUsage: usage(60, 4),
+      };
+      await runTick(deps);
+      expect(spawnAgent).toHaveBeenCalledTimes(1);
+
+      // The same repo, same cap, a day earlier: the cap holds.
+      const spawnLater = vi.fn(async () => ({ ok: true, output: '' }));
+      await runTick({
+        ...deps,
+        api: api([makeTask({ id: 'a', project_id: 'OVL' })]),
+        spawnAgent: spawnLater,
+        fetchUsage: usage(10, 28),
+      });
+      expect(spawnLater).not.toHaveBeenCalled();
     });
   });
 });

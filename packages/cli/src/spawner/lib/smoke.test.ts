@@ -17,6 +17,15 @@ const config: AgentSpawnerConfig = {
   pollIntervalSeconds: 600,
   maxWorktrees: 0,
   maxWorktreesPerRepo: {},
+  // `./config.js` is mocked below, so the defaults are spelled out here.
+  usage: {
+    enabled: false,
+    dailyReservePercent: 13,
+    sessionMaxPercent: 50,
+    preResetHours: 8,
+    preResetBonusWorktrees: 2,
+    night: null,
+  },
   branchPrefix: 'agent/',
   promptTemplate: "Let's tackle this task {{url}}",
   labels: { ready: '1', working: '2', error: '3' },
