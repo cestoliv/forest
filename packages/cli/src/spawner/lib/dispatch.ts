@@ -77,7 +77,10 @@ export async function dispatchTask(
     return 'at-capacity';
   }
 
-  const prompt = renderTemplate(config.promptTemplate, task);
+  const prompt = renderTemplate(
+    rule.promptTemplate ?? config.promptTemplate,
+    task,
+  );
   log(
     `Dispatching task ${task.id} -> ${path}${ide ? ` (ide ${ide})` : ''} (branch ${branch}).`,
   );

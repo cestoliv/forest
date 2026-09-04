@@ -45,6 +45,7 @@ wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macO
 wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of the default
 wt agent big-job "Plan it" --model fable  # Bigger model for one run
 wt prune                                  # Remove merged worktrees (per-branch confirm)
+wt count                                  # Count worktrees, total and per repo
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
 ```
@@ -259,6 +260,26 @@ is skipped (with a note) rather than failing the prune when it can't pull:
 Pass `--no-pull` to skip this entirely. The TUI `P` key **always** auto-pulls
 (there is no TUI opt-out; `--no-pull` is CLI-only).
 
+## Count — `wt count`
+
+```bash
+wt count
+```
+
+Prints the total number of worktrees across every registered repo, plus a
+per-repo breakdown, sorted by count (descending, then by repo name):
+
+```
+Total: 4 worktrees
+
+  forest     2
+  overload   1
+  website    1
+```
+
+The main checkout of each repo doesn't count — only linked worktrees do. Every
+registered repo gets a row, even one with no linked worktrees (`0`).
+
 ## Configuration
 
 Edit with `wt config` (`wt config --path` prints the file location —
@@ -401,12 +422,14 @@ beautified on open, and an invalid JSON edit prints the parse error and exits
 - **`token`** — a Todoist API token (or set `TODOIST_API_TOKEN`)
 - **`labels`** — the `ready` / `working` / `error` Todoist label ids the
   daemon reads and swaps
-- **`rules`** — ordered routing rules, each `{ project, labels?, path, ide? }`:
-  the first rule whose Todoist project id matches (and whose `labels`, if
-  given, are all present on the task) wins, and `path` is the absolute (or
-  `~`-expandable) local repo root to dispatch into. Optional `ide` (`zed` or
-  `orca`) picks the launch target for that route; when omitted it falls back to
-  `wt`'s configured `ide` default
+- **`rules`** — ordered routing rules, each
+  `{ project, labels?, path, ide?, promptTemplate? }`: the first rule whose
+  Todoist project id matches (and whose `labels`, if given, are all present on
+  the task) wins, and `path` is the absolute (or `~`-expandable) local repo root
+  to dispatch into. Optional `ide` (`zed` or `orca`) picks the launch target for
+  that route; when omitted it falls back to `wt`'s configured `ide` default.
+  Optional `promptTemplate` overrides the global `promptTemplate` for that
+  route, with the same placeholders; when omitted the global one is used
 - **`maxWorktrees`** (default `0`) and **`maxWorktreesPerRepo`** (default `{}`)
   — worktree caps. `maxWorktrees` counts every repo the `rules` point at
   together; `maxWorktreesPerRepo` caps one repo, keyed by the same path a rule

@@ -73,6 +73,44 @@ describe('loadConfig', () => {
     expect(loadConfig(store).rules[0].ide).toBeUndefined();
   });
 
+  it('threads a per-route promptTemplate through, and leaves it undefined when unset', () => {
+    const store = tmpStore();
+    store.store = {
+      ...valid,
+      rules: [
+        { project: 'p1', path: '~/dev/a', promptTemplate: 'use the skill' },
+        { project: 'p2', path: '~/dev/b' },
+      ],
+    };
+    const cfg = loadConfig(store);
+    expect(cfg.rules[0].promptTemplate).toBe('use the skill');
+    expect(cfg.rules[1].promptTemplate).toBeUndefined();
+  });
+
+  it('drops a blank promptTemplate so it falls back to the global template', () => {
+    const store = tmpStore();
+    store.store = {
+      ...valid,
+      rules: [{ project: 'p1', path: '~/dev/a', promptTemplate: '  ' }],
+    };
+    expect(loadConfig(store).rules[0].promptTemplate).toBeUndefined();
+  });
+
+  it('throws when a rule promptTemplate is not a string', () => {
+    const store = tmpStore();
+    store.store = {
+      ...valid,
+      rules: [
+        {
+          project: 'p1',
+          path: '~/dev/a',
+          promptTemplate: 42 as unknown as string,
+        },
+      ],
+    };
+    expect(() => loadConfig(store)).toThrow(/promptTemplate must be a string/);
+  });
+
   it('prefers TODOIST_API_TOKEN env over config token', () => {
     const store = tmpStore();
     store.store = valid;

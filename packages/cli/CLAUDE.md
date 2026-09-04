@@ -29,6 +29,7 @@ After building, the CLI is available as `wt` (via the `bin` field in package.jso
   - `--mode` — Claude Code permission mode: `default` (default), `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`. When omitted, falls back to the `agent_mode` config key (which itself defaults to `default`).
   - `--model` — Model to run the agent on (e.g. `fable`, `opus`); overrides the `agent_model` config key. When omitted (and `agent_model` unset), no `--model` is passed and Claude Code uses its default. `agent_model` defaults to `''`, is per-repo overridable, and any string is accepted (no validation).
 - `wt prune` — Remove all worktrees whose branch is merged into `base_branch` (per-branch confirmation; also the TUI `P` key). Afterwards fast-forwards each affected repo's main worktree (`git pull --ff-only`); `--no-pull` opts out (CLI-only — the TUI `P` key always pulls)
+- `wt count` — Print the total number of worktrees plus a per-repo breakdown (main checkouts excluded, every registered repo listed even at `0`)
 - `wt config [--path]` — Open config file or print its path
 - `wt skill` — Print the bundled SKILL.md
 
@@ -225,6 +226,12 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   it's the one removed, a warning printed on return to the shell (via
   `warnIfCwdRemoved`) notes the current directory no longer exists. Only `main`
   is protected (`removeWorktree` hard-refuses it).
+- `wt count` → `src/wt/commands/count.ts` — reuses `prepareListItems` (same
+  global scan + auto-registration as `list`/`prune`), then counts each item
+  with `isMain` false (the main checkout is the repo itself, not a workspace —
+  same rule `spawner/lib/capacity.ts` uses for its worktree cap). Every repo
+  from `getRegisteredRepos` gets a row, including one with zero linked
+  worktrees; rows sort by count descending, then repo basename ascending.
 - `wt config [--path]` → `src/wt/commands/config.ts` — opens the config file in `$EDITOR` (beautifying it first, and exiting 1 if it's still invalid JSON on close), or prints the path with `--path`
 - `wt skill` → `src/wt/commands/skill.ts` — prints the bundled SKILL.md to stdout
 
@@ -352,8 +359,11 @@ a `RouteRule` with no `ide` (or a blank one, which `loadConfig` normalises to
 `createAgentWorktree`'s `options.ide ?? config.ide`. Every `pollIntervalSeconds` (default 600) it fetches `Agent
 Ready` tasks, drops the ones already Working/Error or due later, picks the
 oldest of the rest, resolves a repo via the rules, and dispatches. The prompt
-sent to `wt agent` is built from `promptTemplate` with `{{url}}`, `{{title}}`,
-`{{id}}`, `{{description}}`, and `{{projectId}}` placeholders.
+sent to `wt agent` is built from `rule.promptTemplate ?? config.promptTemplate`
+with `{{url}}`, `{{title}}`, `{{id}}`, `{{description}}`, and `{{projectId}}`
+placeholders, so one route can open its agent differently from the rest.
+`loadConfig` normalises a blank per-rule template to `undefined`, which falls
+back to the global one.
 
 ### Worktree caps
 

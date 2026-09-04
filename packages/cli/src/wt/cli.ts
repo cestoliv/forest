@@ -83,6 +83,14 @@ program
   });
 
 program
+  .command('count')
+  .description('Count worktrees, total and per repo')
+  .action(async () => {
+    const { runCount } = await import('./commands/count.js');
+    await runCount();
+  });
+
+program
   .command('config')
   .description('Open the config file in $EDITOR')
   .option('--path', 'Print the config file path and exit')
