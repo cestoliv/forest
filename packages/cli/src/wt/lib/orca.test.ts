@@ -8,14 +8,14 @@ import {
   buildSwitchCommand,
   isOrcaSuccess,
   isRuntimeReachable,
-  isSelectorNotFound,
+  isWorktreeInvisible,
   type OrcaResult,
   type OrcaRunner,
   openWorktreeInOrca,
   parseTerminalHandle,
-  SELECTOR_NOT_FOUND_HINT,
   startAgentInOrca,
   stopOrcaWorktree,
+  WORKTREE_INVISIBLE_HINT,
 } from './orca.js';
 
 // Only `defaultRunner` reaches child_process; every other test injects a runner.
@@ -234,10 +234,10 @@ describe('isOrcaSuccess', () => {
   });
 });
 
-describe('isSelectorNotFound', () => {
+describe('isWorktreeInvisible', () => {
   it('is true when the JSON error code is selector_not_found', () => {
     expect(
-      isSelectorNotFound({
+      isWorktreeInvisible({
         code: 1,
         stdout: JSON.stringify({
           ok: false,
@@ -248,18 +248,47 @@ describe('isSelectorNotFound', () => {
     ).toBe(true);
   });
 
+  it('is true for the handle-timeout runtime_error (Orca 1.4)', () => {
+    expect(
+      isWorktreeInvisible({
+        code: 1,
+        stdout: JSON.stringify({
+          ok: false,
+          error: {
+            code: 'runtime_error',
+            message: 'Timed out waiting for terminal handle after creation',
+          },
+        }),
+        stderr: '',
+      }),
+    ).toBe(true);
+  });
+
+  it('is false for an unrelated runtime_error', () => {
+    expect(
+      isWorktreeInvisible({
+        code: 1,
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'runtime_error', message: 'disk is full' },
+        }),
+        stderr: '',
+      }),
+    ).toBe(false);
+  });
+
   it('is false for a different error code, ok:false, or non-JSON', () => {
     expect(
-      isSelectorNotFound({
+      isWorktreeInvisible({
         code: 1,
         stdout: JSON.stringify({ ok: false, error: { code: 'other' } }),
         stderr: '',
       }),
     ).toBe(false);
     expect(
-      isSelectorNotFound({ code: 0, stdout: '{"ok":false}', stderr: '' }),
+      isWorktreeInvisible({ code: 0, stdout: '{"ok":false}', stderr: '' }),
     ).toBe(false);
-    expect(isSelectorNotFound({ code: 1, stdout: 'boom', stderr: '' })).toBe(
+    expect(isWorktreeInvisible({ code: 1, stdout: 'boom', stderr: '' })).toBe(
       false,
     );
   });
@@ -297,7 +326,7 @@ const ENOENT: OrcaResult = {
 };
 // `terminal create` refusing the worktree selector (external-worktree
 // visibility off) — the fixable, retryable failure.
-const SELECTOR_NOT_FOUND: OrcaResult = {
+const WORKTREE_INVISIBLE: OrcaResult = {
   code: 1,
   stdout: JSON.stringify({
     ok: false,
@@ -385,10 +414,10 @@ describe('startAgentInOrca', () => {
     expect(started).toBe(false);
   });
 
-  it('retries terminal create after a selector_not_found once the user confirms', async () => {
+  it('retries terminal create after an invisible-worktree failure once the user confirms', async () => {
     // First create fails (worktree invisible); after the user flips visibility
     // and confirms, the retry succeeds.
-    const runner = makeRunner({ terminalCreate: [SELECTOR_NOT_FOUND, OK] });
+    const runner = makeRunner({ terminalCreate: [WORKTREE_INVISIBLE, OK] });
     const lines: string[] = [];
     const confirmRetry = vi.fn(async () => true);
     const started = await startAgentInOrca({
@@ -403,11 +432,11 @@ describe('startAgentInOrca', () => {
       runner.calls.filter((c) => callKinds([c])[0] === 'terminal').length,
     ).toBe(2);
     expect(confirmRetry).toHaveBeenCalledTimes(1);
-    expect(lines).toContain(SELECTOR_NOT_FOUND_HINT);
+    expect(lines).toContain(WORKTREE_INVISIBLE_HINT);
   });
 
-  it('gives up (not started) on selector_not_found when the user declines the retry', async () => {
-    const runner = makeRunner({ terminalCreate: SELECTOR_NOT_FOUND });
+  it('gives up (not started) on an invisible worktree when the user declines the retry', async () => {
+    const runner = makeRunner({ terminalCreate: WORKTREE_INVISIBLE });
     const lines: string[] = [];
     const started = await startAgentInOrca({
       ...base,
@@ -420,12 +449,37 @@ describe('startAgentInOrca', () => {
     expect(
       runner.calls.filter((c) => callKinds([c])[0] === 'terminal').length,
     ).toBe(1);
-    expect(lines).toContain(SELECTOR_NOT_FOUND_HINT);
+    expect(lines).toContain(WORKTREE_INVISIBLE_HINT);
     // Exactly one "…create failed" message (the hint) — no duplicate generic
     // failure line stacked on top of it.
     expect(
       lines.filter((l) => l.includes('orca terminal create failed')).length,
     ).toBe(1);
+  });
+
+  it("surfaces Orca's own error message on an unrelated create failure", async () => {
+    // Orca puts the reason in its --json stdout and leaves stderr empty, so a
+    // stderr-only failure line would say nothing useful.
+    const runner = makeRunner({
+      terminalCreate: {
+        code: 1,
+        stdout: JSON.stringify({
+          ok: false,
+          error: { code: 'runtime_error', message: 'disk is full' },
+        }),
+        stderr: '',
+      },
+    });
+    const lines: string[] = [];
+    const started = await startAgentInOrca({
+      ...base,
+      runner,
+      report: (m) => lines.push(m),
+    });
+    expect(started).toBe(false);
+    expect(lines).toContain(
+      '\u2717 orca terminal create failed: disk is full (runtime_error).',
+    );
   });
 
   it('auto-launches Orca when the runtime is down, then proceeds once reachable', async () => {

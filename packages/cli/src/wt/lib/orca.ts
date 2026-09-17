@@ -192,36 +192,77 @@ export function isOrcaSuccess(result: OrcaResult): boolean {
 }
 
 /**
- * Whether an `orca … --json` failure is a `selector_not_found` — the runtime
- * couldn't resolve the `--worktree path:<abs>` selector. For `terminal create`
- * this almost always means the repo has *external-worktree visibility* turned
- * off in Orca (the default for newly-added repos since Orca 1.4): `wt` creates
- * its worktrees with plain git, and Orca ignores every external (non-Orca-made)
- * worktree for such a repo, so the path selector misses. Fails closed (false)
- * on non-JSON output or any other error shape.
+ * Pull `error.code` and `error.message` out of an `orca … --json` failure.
+ * Orca reports the reason in its stdout payload and leaves stderr empty, so
+ * without this the user only ever sees a bare "failed". Returns empty strings
+ * when the output isn't the expected JSON shape.
  */
-export function isSelectorNotFound(result: OrcaResult): boolean {
+export function parseOrcaError(result: OrcaResult): {
+  code: string;
+  message: string;
+} {
   try {
     const parsed = JSON.parse(result.stdout) as {
-      error?: { code?: unknown };
+      error?: { code?: unknown; message?: unknown };
     };
-    return parsed.error?.code === 'selector_not_found';
+    const { code, message } = parsed.error ?? {};
+    return {
+      code: typeof code === 'string' ? code : '',
+      message: typeof message === 'string' ? message : '',
+    };
   } catch {
-    return false;
+    return { code: '', message: '' };
   }
 }
 
 /**
- * Actionable hint shown when `terminal create` fails with `selector_not_found`
- * — explains the likely cause (external-worktree visibility off) and the fix,
- * so the cryptic "create failed" line becomes something the user can act on.
+ * Whether an `orca … --json` failure means Orca can't see the worktree. `wt`
+ * creates its worktrees with plain git, and a repo with *external-worktree
+ * visibility* off (the default for repos added before Orca 1.4 grandfathered
+ * the setting) ignores every worktree Orca didn't create itself.
+ *
+ * Orca reports that two ways, so match both:
+ * - `selector_not_found` — the `--worktree path:<abs>` selector missed outright.
+ * - `runtime_error` / "Timed out waiting for terminal handle after creation" —
+ *   the selector resolves, but the hidden worktree has no UI pane to adopt the
+ *   terminal, so the handle never arrives. Only agent commands hit this one; a
+ *   plain command falls back to a background pty and succeeds, which is why
+ *   `wt create` works on a repo where `wt agent` fails.
+ *
+ * Fails closed (false) on non-JSON output or any other error shape.
  */
-export const SELECTOR_NOT_FOUND_HINT =
-  "✗ orca terminal create failed: Orca can't see this worktree.\n" +
+export function isWorktreeInvisible(result: OrcaResult): boolean {
+  const { code, message } = parseOrcaError(result);
+  if (code === 'selector_not_found') return true;
+  return (
+    code === 'runtime_error' && message.includes('waiting for terminal handle')
+  );
+}
+
+/**
+ * Detail suffix for a failure line: Orca's own `error.message` when it has one,
+ * else stderr. Empty string when neither says anything.
+ */
+function failureDetail(result: OrcaResult): string {
+  const { code, message } = parseOrcaError(result);
+  const detail = message || result.stderr.trim();
+  if (!detail) return '';
+  return code ? `: ${detail} (${code})` : `: ${detail}`;
+}
+
+/**
+ * Actionable hint shown when `terminal create` fails because Orca can't see the
+ * worktree — explains the cause and the fix, so the cryptic "create failed"
+ * line becomes something the user can act on.
+ */
+export const WORKTREE_INVISIBLE_HINT =
+  "\u2717 orca terminal create failed: Orca can't see this worktree.\n" +
   '  wt creates worktrees with plain git, but this repo has external-worktree\n' +
-  '  visibility turned off in Orca (the default for newly-added repos), so Orca\n' +
-  '  ignores them and the worktree selector misses.\n' +
-  '  Fix: in Orca, open this repo and enable showing its external worktrees.';
+  '  visibility turned off in Orca, so Orca ignores them and the terminal has\n' +
+  '  no pane to attach to.\n' +
+  "  Fix: in Orca, open this repo's settings and enable showing its external\n" +
+  '  worktrees, then retry. No CLI or config file sets it: Orca rewrites its\n' +
+  '  state file from memory.';
 
 // ---------------------------------------------------------------------------
 // Side-effecting wrappers (thin; runner + sleep injectable for tests).
@@ -345,7 +386,7 @@ const defaultSleep: Sleeper = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * Default retry prompt for the `selector_not_found` path. Interactivity-gated:
+ * Default retry prompt for the invisible-worktree path. Interactivity-gated:
  * with nobody to answer (the daemon, a piped run) it returns false so
  * the flow reports the hint and gives up rather than blocking on a prompt that
  * can't be answered. Otherwise it asks the user to confirm they've enabled the
@@ -427,8 +468,8 @@ function reportSpawnFailure(
  * best-effort `terminal switch` — a failed/absent switch never fails the launch
  * (the terminal is already created and running).
  *
- * A `selector_not_found` on `terminal create` (Orca can't see the plain-git
- * worktree — usually external-worktree visibility being off) is fixable in
+ * A `terminal create` failure that means Orca can't see the plain-git worktree
+ * (external-worktree visibility off) is fixable in
  * Orca's UI, so `confirmRetry` guides the user and re-runs the create until it
  * works or they decline. `confirmRetry` returns false for a non-interactive
  * caller (the daemon), so batch dispatch just reports the hint and gives up.
@@ -445,9 +486,7 @@ async function runOrcaFlow(
 
   const added = await runner(cmds.repoAdd);
   if (!isOrcaSuccess(added)) {
-    report(
-      `✗ orca repo add failed${added.stderr ? `: ${added.stderr.trim()}` : ''}.`,
-    );
+    report(`✗ orca repo add failed${failureDetail(added)}.`);
     return false;
   }
 
@@ -456,15 +495,13 @@ async function runOrcaFlow(
   // hint (which already carries the "✗ … failed" line) is reprinted each round;
   // a declined/non-TTY confirm ends here without the generic failure line, since
   // the hint is the more useful message.
-  while (!isOrcaSuccess(term) && isSelectorNotFound(term)) {
-    report(SELECTOR_NOT_FOUND_HINT);
+  while (!isOrcaSuccess(term) && isWorktreeInvisible(term)) {
+    report(WORKTREE_INVISIBLE_HINT);
     if (!(await confirmRetry())) return false;
     term = await runner(cmds.terminalCreate);
   }
   if (!isOrcaSuccess(term)) {
-    report(
-      `✗ orca terminal create failed${term.stderr ? `: ${term.stderr.trim()}` : ''}.`,
-    );
+    report(`✗ orca terminal create failed${failureDetail(term)}.`);
     return false;
   }
 
@@ -490,7 +527,7 @@ interface OrcaLaunchBase {
   report?: (msg: string) => void;
   /** Injectable delay for the runtime-launch poll (tests pass a no-op). */
   sleep?: Sleeper;
-  /** Injectable retry prompt for the `selector_not_found` path (tests stub it). */
+  /** Injectable retry prompt for the invisible-worktree path (tests stub it). */
   confirmRetry?: RetryConfirm;
 }
 
