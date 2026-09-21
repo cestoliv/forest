@@ -154,7 +154,14 @@ export function removeWorktree(
   try {
     execFileSync(
       'git',
-      ['worktree', 'remove', ...(force ? ['--force'] : []), worktreePath],
+      // `-f -f`: a single `--force` covers dirty worktrees, a locked one (an
+      // agent still claims it) needs the flag twice.
+      [
+        'worktree',
+        'remove',
+        ...(force ? ['--force', '--force'] : []),
+        worktreePath,
+      ],
       { cwd: repoRoot, stdio: 'pipe' },
     );
   } catch (err) {

@@ -229,6 +229,19 @@ describe('removeWorktree', () => {
     expect(worktrees.find((w) => w.branch === 'dirty')).toBeUndefined();
   });
 
+  it('force-removes a locked worktree', () => {
+    const wtPath = path.join(tmpDir, 'repo-locked');
+    addWorktree(repoDir, wtPath, 'locked', 'HEAD');
+    execSync(`git worktree lock --reason "claude agent" ${wtPath}`, {
+      cwd: repoDir,
+    });
+    expect(() => removeWorktree(repoDir, wtPath)).toThrow();
+    removeWorktree(repoDir, wtPath, true);
+    const worktrees = listWorktrees(repoDir, repoDir);
+    expect(worktrees.find((w) => w.branch === 'locked')).toBeUndefined();
+    expect(existsSync(wtPath)).toBe(false);
+  });
+
   it('falls back to manual removal when git worktree remove fails', () => {
     const wtPath = path.join(tmpDir, 'repo-fallback');
     addWorktree(repoDir, wtPath, 'fallback', 'HEAD');
