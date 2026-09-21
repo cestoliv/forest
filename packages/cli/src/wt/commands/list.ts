@@ -301,48 +301,64 @@ export async function deleteWorktree(
     return reportRemoved('✓ Removed');
   } catch (err) {
     const msg = String(err);
-    if (msg.includes('cannot be moved or removed')) {
-      clack.log.warn(
-        'Worktree contains git submodules, which prevent standard removal.',
+    const reason = forceReason(msg, item.path, name);
+    if (!reason) {
+      console.error(pc.red(`✗ Failed to remove ${name}: ${msg}`));
+      return false;
+    }
+
+    if (reason.warning) clack.log.warn(reason.warning);
+    const force = await clack.confirm({ message: reason.question });
+    if (clack.isCancel(force) || !force) return false;
+    try {
+      removeWorktree(item.repoRoot, item.path, true);
+      return reportRemoved('✓ Force-removed');
+    } catch (err2) {
+      console.error(
+        pc.red(`✗ Failed to force-remove ${name}: ${String(err2)}`),
       );
-      const force = await clack.confirm({
-        message: `Force delete ${pc.bold(name)}? The worktree directory will be removed directly.`,
-      });
-      if (clack.isCancel(force) || !force) return false;
-      try {
-        removeWorktree(item.repoRoot, item.path, true);
-        return reportRemoved('✓ Force-removed');
-      } catch (err2) {
-        console.error(
-          pc.red(`✗ Failed to force-remove ${name}: ${String(err2)}`),
-        );
-        return false;
-      }
+      return false;
     }
-    if (msg.includes('modified or untracked files')) {
-      const dirty = listWorktreeDirtyFiles(item.path);
-      if (dirty.length > 0) {
-        clack.log.warn(
-          `Worktree has uncommitted changes:\n${dirty.map((f) => `  ${f}`).join('\n')}`,
-        );
-      }
-      const force = await clack.confirm({
-        message: `Force delete ${pc.bold(name)}? All changes will be lost.`,
-      });
-      if (clack.isCancel(force) || !force) return false;
-      try {
-        removeWorktree(item.repoRoot, item.path, true);
-        return reportRemoved('✓ Force-removed');
-      } catch (err2) {
-        console.error(
-          pc.red(`✗ Failed to force-remove ${name}: ${String(err2)}`),
-        );
-        return false;
-      }
-    }
-    console.error(pc.red(`✗ Failed to remove ${name}: ${msg}`));
-    return false;
   }
+}
+
+/**
+ * The three ways `git worktree remove` refuses a removal that a force retry
+ * can still carry out: submodules, uncommitted changes, and a lock left by an
+ * agent that claimed the worktree (often a dead one — the lock outlives the
+ * process). Returns the warning to print and the question to ask, or
+ * `undefined` for a failure force cannot fix.
+ */
+function forceReason(
+  msg: string,
+  worktreePath: string,
+  name: string,
+): { warning?: string; question: string } | undefined {
+  if (msg.includes('cannot be moved or removed')) {
+    return {
+      warning:
+        'Worktree contains git submodules, which prevent standard removal.',
+      question: `Force delete ${pc.bold(name)}? The worktree directory will be removed directly.`,
+    };
+  }
+  if (msg.includes('locked working tree')) {
+    const lock = /lock reason: (.*)/.exec(msg)?.[1].trim();
+    return {
+      warning: `Worktree is locked${lock ? `: ${lock}` : ''}.`,
+      question: `Force delete ${pc.bold(name)}? The lock will be overridden.`,
+    };
+  }
+  if (msg.includes('modified or untracked files')) {
+    const dirty = listWorktreeDirtyFiles(worktreePath);
+    return {
+      warning:
+        dirty.length > 0
+          ? `Worktree has uncommitted changes:\n${dirty.map((f) => `  ${f}`).join('\n')}`
+          : undefined,
+      question: `Force delete ${pc.bold(name)}? All changes will be lost.`,
+    };
+  }
+  return undefined;
 }
 
 /**
