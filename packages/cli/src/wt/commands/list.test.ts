@@ -271,6 +271,126 @@ describe('runPrune (dead-cwd warning wiring)', () => {
   });
 });
 
+describe('runPrune <branch>', () => {
+  let store: ReturnType<typeof createStore>;
+
+  beforeEach(() => {
+    execSync('git branch -M main', { cwd: repoDir });
+    store = createStore(path.join(tmpDir, 'config'));
+    // Slashless base_branch → no fetch; no remote → no forge call.
+    setGlobalConfig({ repos: [repoDir], base_branch: 'main' }, store);
+    vi.mocked(clack.confirm).mockClear();
+    vi.mocked(clack.log.warn).mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A worktree on `branch` holding one commit that is not in main. */
+  function addUnmergedWorktree(branch: string, repo = repoDir): string {
+    const wtPath = `${repo}-${branch}`;
+    execSync(`git worktree add -b ${branch} ${wtPath}`, { cwd: repo });
+    writeFileSync(path.join(wtPath, `${branch}.txt`), 'x');
+    execSync('git add . && git commit -m "wip"', { cwd: wtPath });
+    return wtPath;
+  }
+
+  it('removes a merged branch with the usual confirmation', async () => {
+    const wtPath = addUnmergedWorktree('feature');
+    writeFileSync(path.join(repoDir, 'other.txt'), 'y');
+    execSync('git add . && git commit -m "other"', { cwd: repoDir });
+    execSync('git cherry-pick feature', { cwd: repoDir });
+
+    await runPrune({ branch: 'feature', cwd: repoDir, store });
+
+    expect(existsSync(wtPath)).toBe(false);
+    expect(clack.log.warn).not.toHaveBeenCalled();
+    expect(vi.mocked(clack.confirm).mock.calls[0][0].initialValue).toBe(
+      undefined,
+    );
+  });
+
+  it('explains an unflagged branch and keeps it when the user declines', async () => {
+    const wtPath = addUnmergedWorktree('stale');
+    vi.mocked(clack.confirm).mockResolvedValueOnce(false);
+
+    await runPrune({ branch: 'stale', cwd: repoDir, store });
+
+    expect(existsSync(wtPath)).toBe(true);
+    const reason = String(vi.mocked(clack.log.warn).mock.calls[0][0]);
+    expect(reason).toContain('1 unique commit(s) not in main');
+    expect(reason).toContain('never pushed to origin');
+    expect(vi.mocked(clack.confirm).mock.calls[0][0].initialValue).toBe(false);
+  });
+
+  it('removes an unflagged branch when the user accepts', async () => {
+    const wtPath = addUnmergedWorktree('stale');
+
+    await runPrune({ branch: 'stale', cwd: repoDir, store });
+
+    expect(existsSync(wtPath)).toBe(false);
+    // The branch itself stays.
+    expect(
+      execSync('git branch --list stale', { cwd: repoDir, encoding: 'utf8' }),
+    ).toContain('stale');
+  });
+
+  it('force-removes a dirty worktree without any prompt under --yes', async () => {
+    const wtPath = addUnmergedWorktree('dirty');
+    writeFileSync(path.join(wtPath, 'dirty.txt'), 'changed');
+    writeFileSync(path.join(wtPath, 'untracked.txt'), 'new');
+
+    await runPrune({ branch: 'dirty', cwd: repoDir, store, yes: true });
+
+    expect(existsSync(wtPath)).toBe(false);
+    expect(clack.confirm).not.toHaveBeenCalled();
+    expect(String(vi.mocked(clack.log.warn).mock.calls[0][0])).toContain(
+      'uncommitted changes',
+    );
+  });
+
+  it('fails when no worktree holds the branch', async () => {
+    await expect(
+      runPrune({ branch: 'nope', cwd: repoDir, store }),
+    ).rejects.toThrow('No worktree is checked out on nope.');
+  });
+
+  it('refuses the main worktree', async () => {
+    await expect(
+      runPrune({ branch: 'main', cwd: repoDir, store, yes: true }),
+    ).rejects.toThrow('main worktree');
+    expect(existsSync(path.join(repoDir, 'README.md'))).toBe(true);
+  });
+
+  it('asks for --repo when several repos match, and honours it', async () => {
+    const otherRepo = path.join(tmpDir, 'other-repo');
+    execSync(`git init -b main ${otherRepo}`);
+    execSync(
+      'git -c user.email=t@t.com -c user.name=T commit --allow-empty -m init',
+      {
+        cwd: otherRepo,
+      },
+    );
+    setGlobalConfig({ repos: [repoDir, otherRepo] }, store);
+    const mine = addUnmergedWorktree('shared');
+    const theirs = `${otherRepo}-shared`;
+    execSync(`git worktree add -b shared ${theirs}`, { cwd: otherRepo });
+
+    await expect(
+      runPrune({ branch: 'shared', cwd: repoDir, store }),
+    ).rejects.toThrow('--repo');
+
+    await runPrune({
+      branch: 'shared',
+      repo: otherRepo,
+      cwd: repoDir,
+      store,
+      yes: true,
+    });
+    expect(existsSync(theirs)).toBe(false);
+    expect(existsSync(mine)).toBe(true);
+  });
+});
+
 describe('deleteWorktree (Orca teardown)', () => {
   beforeEach(() => {
     vi.mocked(stopOrcaWorktree).mockClear();

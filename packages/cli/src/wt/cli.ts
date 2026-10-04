@@ -69,18 +69,36 @@ program
   );
 
 program
-  .command('prune')
+  .command('prune [branch]')
   .description(
-    'Remove worktrees whose branch has been merged into the base branch',
+    'Remove worktrees whose branch has been merged into the base branch, or the worktree of one branch',
+  )
+  .option(
+    '--repo <path>',
+    'Repository to look in for <branch>; skips the repo picker',
+  )
+  .option(
+    '-y, --yes',
+    'Answer yes to every confirmation, including force-removal',
   )
   .option(
     '--no-pull',
     'Skip pulling the main worktree after pruning merged worktrees',
   )
-  .action(async (options) => {
-    const { runPrune } = await import('./commands/prune.js');
-    await runPrune({ pull: options.pull });
-  });
+  .action(
+    async (
+      branch: string | undefined,
+      options: { repo?: string; yes?: boolean; pull: boolean },
+    ) => {
+      const { runPrune } = await import('./commands/prune.js');
+      await runPrune({
+        branch,
+        repo: options.repo,
+        yes: options.yes,
+        pull: options.pull,
+      });
+    },
+  );
 
 program
   .command('count')

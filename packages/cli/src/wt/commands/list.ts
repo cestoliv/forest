@@ -230,10 +230,15 @@ export async function runList(
  * `teardown_commands` first and force-confirming when git refuses (submodules
  * or dirty files). Returns true iff the worktree was removed. Shared by the
  * TUI single-delete (`D`) and the prune flow so both behave identically.
+ *
+ * `yes` answers every prompt with yes (`wt prune <branch> --yes`).
+ * `initialValue` preselects the first prompt's answer: `wt prune <branch>`
+ * passes `false` for a worktree no prune signal flags.
  */
 export async function deleteWorktree(
   item: Worktree,
   store: ConfigStore,
+  options: { yes?: boolean; initialValue?: boolean } = {},
 ): Promise<boolean> {
   // Prune runs globally across every registered repo, so the same branch name
   // can appear in multiple projects (e.g. a `back` and a `front` repo sharing a
@@ -242,10 +247,19 @@ export async function deleteWorktree(
   // unambiguous about which worktree it's about to remove.
   const name = `${path.basename(item.repoRoot)}/${item.branch}`;
 
-  const confirmed = await clack.confirm({
-    message: `Remove worktree ${pc.bold(name)}? This cannot be undone.`,
-  });
-  if (clack.isCancel(confirmed) || !confirmed) return false;
+  const ask = async (message: string, initialValue?: boolean) => {
+    if (options.yes) return true;
+    const answer = await clack.confirm({ message, initialValue });
+    return !clack.isCancel(answer) && answer;
+  };
+
+  if (
+    !(await ask(
+      `Remove worktree ${pc.bold(name)}? This cannot be undone.`,
+      options.initialValue,
+    ))
+  )
+    return false;
 
   // Single success exit for all three removal paths (normal + two force
   // fallbacks): report the removal. The "your shell is now in a gone directory"
@@ -289,10 +303,7 @@ export async function deleteWorktree(
       clack.log.warn(
         `Teardown command failed: ${result.failedCommand} (exit code ${result.exitCode})`,
       );
-      const proceed = await clack.confirm({
-        message: `Delete ${pc.bold(name)} anyway?`,
-      });
-      if (clack.isCancel(proceed) || !proceed) return false;
+      if (!(await ask(`Delete ${pc.bold(name)} anyway?`))) return false;
     }
   }
 
@@ -308,8 +319,7 @@ export async function deleteWorktree(
     }
 
     if (reason.warning) clack.log.warn(reason.warning);
-    const force = await clack.confirm({ message: reason.question });
-    if (clack.isCancel(force) || !force) return false;
+    if (!(await ask(reason.question))) return false;
     try {
       removeWorktree(item.repoRoot, item.path, true);
       return reportRemoved('✓ Force-removed');
@@ -522,6 +532,41 @@ export async function pullMainWorktrees(
 }
 
 /**
+ * Best-effort fetch of each repo's base remote, once per repo, so merge
+ * detection sees up-to-date refs. A missing remote or a failed fetch only warns.
+ */
+export function fetchRepos(items: Worktree[], store: ConfigStore): void {
+  const seen = new Set<string>();
+  for (const wt of items) {
+    if (seen.has(wt.repoRoot)) continue;
+    seen.add(wt.repoRoot);
+    const parts = getEffectiveConfig(wt.repoRoot, store).base_branch.split(
+      '/',
+      2,
+    );
+    if (parts.length !== 2) continue;
+    const remote = parts[0] || 'origin';
+    if (!remoteExists(wt.repoRoot, remote)) {
+      console.warn(
+        pc.yellow(
+          `⚠ ${path.basename(wt.repoRoot)} has no "${remote}" remote — falling back to local git`,
+        ),
+      );
+      continue;
+    }
+    try {
+      fetchRemote(wt.repoRoot, remote);
+    } catch (err) {
+      console.warn(
+        pc.yellow(
+          `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+        ),
+      );
+    }
+  }
+}
+
+/**
  * Find every merged worktree among `items` and remove it via `deleteWorktree`
  * (per-branch confirmation + force-confirmation). Optionally best-effort
  * fetches each repo's remote first so merge detection sees up-to-date refs.
@@ -534,36 +579,7 @@ export async function wipeWorktrees(
   store: ConfigStore,
   options: { fetch?: boolean; pull?: boolean } = {},
 ): Promise<Worktree[]> {
-  if (options.fetch) {
-    const seen = new Set<string>();
-    for (const wt of items) {
-      if (seen.has(wt.repoRoot)) continue;
-      seen.add(wt.repoRoot);
-      const parts = getEffectiveConfig(wt.repoRoot, store).base_branch.split(
-        '/',
-        2,
-      );
-      if (parts.length !== 2) continue;
-      const remote = parts[0] || 'origin';
-      if (!remoteExists(wt.repoRoot, remote)) {
-        console.warn(
-          pc.yellow(
-            `⚠ ${path.basename(wt.repoRoot)} has no "${remote}" remote — falling back to local git`,
-          ),
-        );
-        continue;
-      }
-      try {
-        fetchRemote(wt.repoRoot, remote);
-      } catch (err) {
-        console.warn(
-          pc.yellow(
-            `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
-          ),
-        );
-      }
-    }
-  }
+  if (options.fetch) fetchRepos(items, store);
 
   const candidates = selectWipeCandidates(items, buildPrunePredicate(store));
   if (candidates.length === 0) {

@@ -3,11 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   buildClosedQuery,
   buildMergedQuery,
+  buildOpenQuery,
   type ForgeRunner,
+  findOpenPullRequest,
   hasClosedPullRequest,
   hasMergedPullRequest,
   parseClosedResult,
   parseMergedResult,
+  parseOpenResult,
   parseRemoteHost,
   selectForgeTool,
 } from './forge.js';
@@ -432,5 +435,57 @@ describe('hasClosedPullRequest', () => {
         runner('garbage', '[{"state":"CLOSED"}]'),
       ),
     ).toBe(false);
+  });
+});
+
+describe('findOpenPullRequest', () => {
+  const runner = (url: string, out: string): ForgeRunner => ({
+    remoteUrl: () => url,
+    query: () => out,
+  });
+
+  it('asks gh and glab for open PRs/MRs into the base only', () => {
+    expect(buildOpenQuery('gh', 'feat/x', 'main')).toEqual([
+      'pr',
+      'list',
+      '--head',
+      'feat/x',
+      '--base',
+      'main',
+      '--state',
+      'open',
+      '--json',
+      'number',
+    ]);
+    expect(buildOpenQuery('glab', 'feat/x', 'main')).toContain(
+      '--target-branch',
+    );
+  });
+
+  it('reads the gh number and the glab iid', () => {
+    expect(parseOpenResult('[{"number":12}]')).toBe(12);
+    expect(parseOpenResult('[{"iid":7,"id":9001}]')).toBe(7);
+    expect(parseOpenResult('[]')).toBeUndefined();
+    expect(parseOpenResult('nope')).toBeUndefined();
+  });
+
+  it('returns the open PR number, or undefined when the forge call fails', () => {
+    expect(
+      findOpenPullRequest(
+        '/repo',
+        'feat/x',
+        'main',
+        'origin',
+        runner('git@github.com:o/r.git', '[{"number":42}]'),
+      ),
+    ).toBe(42);
+    expect(
+      findOpenPullRequest('/repo', 'feat/x', 'main', 'origin', {
+        remoteUrl: () => 'git@github.com:o/r.git',
+        query: () => {
+          throw new Error('offline');
+        },
+      }),
+    ).toBeUndefined();
   });
 });

@@ -29,6 +29,7 @@ After building, the CLI is available as `wt` (via the `bin` field in package.jso
   - `--mode` — Claude Code permission mode: `default` (default), `acceptEdits`, `plan`, `auto`, `dontAsk`, `bypassPermissions`. When omitted, falls back to the `agent_mode` config key (which itself defaults to `default`).
   - `--model` — Model to run the agent on (e.g. `fable`, `opus`); overrides the `agent_model` config key. When omitted (and `agent_model` unset), no `--model` is passed and Claude Code uses its default. `agent_model` defaults to `''`, is per-repo overridable, and any string is accepted (no validation).
 - `wt prune` — Remove all worktrees whose branch is merged into `base_branch` (per-branch confirmation; also the TUI `P` key). Afterwards fast-forwards each affected repo's main worktree (`git pull --ff-only`); `--no-pull` opts out (CLI-only — the TUI `P` key always pulls)
+- `wt prune <branch> [--repo <path>] [-y]` — Remove the worktree checked out on `<branch>`, merged or not. Unflagged branches get the reasons and a default-No confirmation; `-y` skips every prompt; `--repo` disambiguates when several repos match
 - `wt count` — Print the total number of worktrees plus a per-repo breakdown (main checkouts excluded, every registered repo listed even at `0`)
 - `wt config [--path]` — Open config file or print its path
 - `wt skill` — Print the bundled SKILL.md
@@ -226,6 +227,16 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   it's the one removed, a warning printed on return to the shell (via
   `warnIfCwdRemoved`) notes the current directory no longer exists. Only `main`
   is protected (`removeWorktree` hard-refuses it).
+  `wt prune <branch>` (`pruneBranch` in `prune.ts`) targets one worktree:
+  it matches `branch` across all registered repos (or only `--repo`'s,
+  validated with `getRepoRoot`), asks `runRepoPicker` when several repos match
+  (throws without a TTY), throws for no match or the main worktree, then runs
+  `fetchRepos` + `buildPrunePredicate` on the one target. Unflagged → it warns
+  with `explainNotFlagged` (unique commits via `countUniqueCommits`, never
+  pushed, open PR via `forge.ts` `findOpenPullRequest`, dirty) and calls
+  `deleteWorktree(target, store, { initialValue: false })`. `deleteWorktree`'s
+  `yes` option (`-y`) answers all its prompts, including teardown-failure and
+  force confirmations. `--yes`/`--repo` without a branch throw.
 - `wt count` → `src/wt/commands/count.ts` — reuses `prepareListItems` (same
   global scan + auto-registration as `list`/`prune`), then counts each item
   with `isMain` false (the main checkout is the repo itself, not a workspace —
@@ -289,8 +300,9 @@ its own picker) or the `--repo <path>` CLI flag (validated as a real git repo
 first). A consequence approved as part of this design: a non-TTY
 `wt create`/`wt agent` run from inside a repo (without `--repo`) exits with the
 "no TTY available" error because the picker needs a TTY — there is no
-single-repo shortcut. `wt prune` deliberately has **no** `--repo` flag: it stays
-global (all registered repos) so no scoping is reintroduced.
+single-repo shortcut. `wt prune` stays global (all registered repos). Its
+`--repo` flag only applies with a `<branch>`, to pick between repos that share
+that branch name.
 
 ### Worktree path convention
 
