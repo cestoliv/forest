@@ -359,6 +359,25 @@ export function isBranchMerged(
 }
 
 /**
+ * How many of `branch`'s commits have no patch-equivalent in `baseBranch` (the
+ * `+` lines of `git cherry`). Only explains why a branch is not prunable, never
+ * decides it, so an error yields `undefined` rather than a guess.
+ */
+export function countUniqueCommits(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+): number | undefined {
+  try {
+    return cherryLines(repoRoot, branch, baseBranch).filter((l) =>
+      l.startsWith('+'),
+    ).length;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Whether `branch` carries no commits that base doesn't already have: `git
  * cherry` emits nothing *and* the tip is an ancestor of base. True for a branch
  * merged by fast-forward or by a merge commit, for a branch sitting exactly on

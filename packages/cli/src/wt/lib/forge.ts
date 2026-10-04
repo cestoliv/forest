@@ -273,3 +273,78 @@ export function hasClosedPullRequest(
     return false;
   }
 }
+
+/**
+ * argv for listing the *open* PRs/MRs whose head is `branch` and whose target
+ * is `baseBranch`. glab lists only open MRs by default.
+ */
+export function buildOpenQuery(
+  tool: ForgeTool,
+  branch: string,
+  baseBranch: string,
+): string[] {
+  if (tool === 'gh') {
+    return [
+      'pr',
+      'list',
+      '--head',
+      branch,
+      '--base',
+      baseBranch,
+      '--state',
+      'open',
+      '--json',
+      'number',
+    ];
+  }
+  return [
+    'mr',
+    'list',
+    '--source-branch',
+    branch,
+    '--target-branch',
+    baseBranch,
+    '-F',
+    'json',
+  ];
+}
+
+/**
+ * Parse the CLI's JSON output → the first open PR/MR number (gh `number`,
+ * glab `iid`), or `undefined` when there is none or the output is unreadable.
+ */
+export function parseOpenResult(stdout: string): number | undefined {
+  try {
+    const data = JSON.parse(stdout);
+    if (!Array.isArray(data) || data.length === 0) return undefined;
+    const n = Number(data[0]?.number ?? data[0]?.iid);
+    return Number.isInteger(n) ? n : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The number of an open PR/MR from `branch` into `baseBranch`, or `undefined`.
+ * Only explains why `wt prune <branch>` does not flag a branch, so it fails
+ * quietly (`undefined`) on any error, like the other forge lookups.
+ */
+export function findOpenPullRequest(
+  repoRoot: string,
+  branch: string,
+  baseBranch: string,
+  remote = 'origin',
+  runner: ForgeRunner = defaultRunner,
+): number | undefined {
+  try {
+    const tool = selectForgeTool(
+      parseRemoteHost(runner.remoteUrl(repoRoot, remote)),
+    );
+    if (!tool) return undefined;
+    return parseOpenResult(
+      runner.query(repoRoot, tool, buildOpenQuery(tool, branch, baseBranch)),
+    );
+  } catch {
+    return undefined;
+  }
+}

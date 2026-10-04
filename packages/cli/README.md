@@ -45,6 +45,7 @@ wt agent my-feat "Plan the feature"       # New worktree + AI agent in Zed (macO
 wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of the default
 wt agent big-job "Plan it" --model fable  # Bigger model for one run
 wt prune                                  # Remove merged worktrees (per-branch confirm)
+wt prune my-feat                          # Remove one branch's worktree, merged or not
 wt count                                  # Count worktrees, total and per repo
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
@@ -179,6 +180,30 @@ erroring (in a non-interactive shell it exits non-zero).
 
 ```bash
 wt prune   # remove every merged worktree, one confirmation per branch
+```
+
+### Remove one branch's worktree
+
+`wt prune <branch>` removes the worktree checked out on `<branch>`, merged or
+not. It looks across every registered repo.
+
+- When the prune signals flag the branch, you get the usual confirmation.
+- When they do not, `wt` prints why (for example `2 unique commit(s) not in
+  origin/main, PR #14 open, uncommitted changes`). The confirmation then
+  defaults to No.
+- When several repos have a worktree on `<branch>`, `wt` asks which one. To
+  skip the picker, pass `--repo <path>`. A non-interactive run requires
+  `--repo`.
+- `-y` / `--yes` answers every confirmation with yes, including the force
+  confirmation for uncommitted changes, submodules, or a lock.
+- The branch stays. Only the worktree goes, through the same Orca stop,
+  `teardown_commands`, and force fallback as any other removal.
+- The main worktree is never removed. A branch with no worktree exits non-zero.
+
+```bash
+wt prune my-feat                    # remove my-feat's worktree, explain if unmerged
+wt prune my-feat --repo ~/dev/api   # pick the repo when several match
+wt prune my-feat -y                 # no prompts, force if needed
 ```
 
 Cleans up the worktrees you're done with: it finds every worktree whose branch
