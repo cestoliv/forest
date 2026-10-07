@@ -4,9 +4,11 @@ import type { Worktree } from './git.js';
 import {
   buildListLayout,
   clampScroll,
+  clipLine,
   filterItems,
   formatRefreshStatus,
   groupByRepo,
+  paintFrame,
   reconcileSelectedIndex,
   renderBranchInput,
   renderList,
@@ -312,6 +314,26 @@ describe('renderList viewport', () => {
     const lines = renderList(items, 0, '', 20).split('\n');
     expect(lines).toHaveLength(19);
     expect(lines[lines.length - 1]).toContain('↕ navigate');
+  });
+});
+
+describe('paintFrame', () => {
+  it('repaints in place without clearing the whole screen first', () => {
+    const out = paintFrame('a\nb');
+    expect(out).not.toContain('\x1B[2J');
+    expect(out).toBe('\x1B[?2026h\x1B[H\x1B[2Ka\n\x1B[2Kb\x1B[J\x1B[?2026l');
+  });
+});
+
+describe('clipLine', () => {
+  it('leaves a line that fits untouched', () => {
+    expect(clipLine('\x1B[1mabc\x1B[22m', 3)).toBe('\x1B[1mabc\x1B[22m');
+  });
+
+  it('cuts visible characters to the width and keeps escape sequences', () => {
+    expect(clipLine('\x1B[1mabcdef\x1B[22m', 4)).toBe(
+      '\x1B[1mabc\x1B[22m…\x1B[0m',
+    );
   });
 });
 

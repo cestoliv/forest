@@ -1,5 +1,6 @@
 // src/lib/tui.ts
 import path from 'node:path';
+import { stripVTControlCharacters } from 'node:util';
 import Fuse from 'fuse.js';
 import pc from 'picocolors';
 import type { Worktree } from './git.js';
@@ -197,16 +198,59 @@ export function renderList(
   return composeView(layout, offset, viewport);
 }
 
-function setupRawMode(): void {
+/**
+ * Repaint a whole screen in place: home the cursor, erase each line just before
+ * redrawing it, then erase below. A full-screen clear first would flash a blank
+ * frame on every keypress. The synchronized-output markers let supporting
+ * terminals swap the frame atomically; others ignore them.
+ */
+export function paintFrame(frame: string, columns = Infinity): string {
+  const lines = frame
+    .split('\n')
+    .map((line) => `\x1B[2K${clipLine(line, columns)}`);
+  return `\x1B[?2026h\x1B[H${lines.join('\n')}\x1B[J\x1B[?2026l`;
+}
+
+/**
+ * Cut a styled line to `columns` visible characters, ending with `…`. Escape
+ * sequences cost no width. Wide characters such as emoji count as one, so a
+ * clipped line can still overflow by a column: disabled auto-wrap absorbs that.
+ */
+export function clipLine(line: string, columns: number): string {
+  if (stripVTControlCharacters(line).length <= columns) return line;
+  let out = '';
+  let width = 0;
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: matches ANSI escapes
+  for (const [token] of line.matchAll(/\x1B\[[0-9;?]*[A-Za-z]|./gsu)) {
+    if (token.startsWith('\x1B')) out += token;
+    else if (width < columns - 1) {
+      out += token;
+      width++;
+    }
+  }
+  return `${out}…\x1B[0m`;
+}
+
+function paint(frame: string): void {
+  process.stdout.write(paintFrame(frame, process.stdout.columns ?? Infinity));
+}
+
+// Every TUI screen draws on the alternate screen, so the shell's scrollback
+// survives and prompts shown between screens land on the normal screen. The
+// cursor is hidden because screens draw their own. Auto-wrap is off: a line
+// wider than the terminal is clipped instead of wrapping onto extra rows, which
+// would overflow the viewport and scroll the top of the list off screen.
+function enterFullscreen(): void {
   process.stdin.setRawMode(true);
   process.stdin.resume();
   process.stdin.setEncoding('utf8');
+  process.stdout.write('\x1B[?1049h\x1B[?25l\x1B[?7l');
 }
 
-function cleanupRawMode(): void {
+function leaveFullscreen(): void {
   process.stdin.setRawMode(false);
   process.stdin.pause();
-  process.stdout.write('\x1B[2J\x1B[H');
+  process.stdout.write('\x1B[?7h\x1B[?25h\x1B[?1049l');
 }
 
 /**
@@ -262,11 +306,10 @@ export async function runRepoPicker(
   let filtered = repos;
 
   const render = () => {
-    process.stdout.write('\x1B[2J\x1B[H');
-    process.stdout.write(renderRepoPicker(filtered, selectedIndex, query));
+    paint(renderRepoPicker(filtered, selectedIndex, query));
   };
 
-  setupRawMode();
+  enterFullscreen();
   render();
 
   return new Promise((resolve, reject) => {
@@ -288,7 +331,7 @@ export async function runRepoPicker(
       try {
         if (key === '\x03' || key === 'q' || key === 'Q' || key === '\x1b') {
           detachListener();
-          cleanupRawMode();
+          leaveFullscreen();
           resolve(null);
         } else if (key === '\x1b[A') {
           selectedIndex = Math.max(0, selectedIndex - 1);
@@ -300,7 +343,7 @@ export async function runRepoPicker(
           const repo = filtered[selectedIndex];
           if (repo) {
             detachListener();
-            cleanupRawMode();
+            leaveFullscreen();
             resolve(repo);
           }
         } else if (key === '\x7f') {
@@ -316,7 +359,7 @@ export async function runRepoPicker(
         }
       } catch (err) {
         detachListener();
-        cleanupRawMode();
+        leaveFullscreen();
         reject(err);
       }
     };
@@ -352,11 +395,10 @@ export async function runBranchInput(
   const repoName = path.basename(repoRoot);
 
   const render = () => {
-    process.stdout.write('\x1B[2J\x1B[H');
-    process.stdout.write(renderBranchInput(repoName, branch, error));
+    paint(renderBranchInput(repoName, branch, error));
   };
 
-  setupRawMode();
+  enterFullscreen();
   render();
 
   return new Promise((resolve, reject) => {
@@ -364,7 +406,7 @@ export async function runBranchInput(
       try {
         if (key === '\x03' || key === '\x1b') {
           process.stdin.removeListener('data', onData);
-          cleanupRawMode();
+          leaveFullscreen();
           resolve(null);
         } else if (key === '\r') {
           if (!branch) {
@@ -372,7 +414,7 @@ export async function runBranchInput(
             render();
           } else {
             process.stdin.removeListener('data', onData);
-            cleanupRawMode();
+            leaveFullscreen();
             resolve(branch);
           }
         } else if (key === '\x7f') {
@@ -386,7 +428,7 @@ export async function runBranchInput(
         }
       } catch (err) {
         process.stdin.removeListener('data', onData);
-        cleanupRawMode();
+        leaveFullscreen();
         reject(err);
       }
     };
@@ -466,11 +508,10 @@ export async function runInteractiveList(
       viewport,
       layout.body.length,
     );
-    process.stdout.write('\x1B[2J\x1B[H');
-    process.stdout.write(composeView(layout, scrollOffset, viewport));
+    paint(composeView(layout, scrollOffset, viewport));
   };
 
-  setupRawMode();
+  enterFullscreen();
   render();
 
   return new Promise((resolve, reject) => {
@@ -529,7 +570,7 @@ export async function runInteractiveList(
         if (key === '\x03' || key === 'q' || key === 'Q' || key === '\x1b') {
           stopRefresh();
           detachListener();
-          cleanupRawMode();
+          leaveFullscreen();
           resolve();
         } else if (key === '\x1b[A') {
           selectedIndex = Math.max(0, selectedIndex - 1);
@@ -542,7 +583,7 @@ export async function runInteractiveList(
           if (item) {
             stopRefresh();
             detachListener();
-            cleanupRawMode();
+            leaveFullscreen();
             handlers.onOpen(item);
             resolve();
           }
@@ -559,7 +600,7 @@ export async function runInteractiveList(
             }
             interacting = true;
             detachListener();
-            cleanupRawMode();
+            leaveFullscreen();
             const confirmed = await handlers.onDelete(item);
             if (confirmed) {
               allItems = allItems.filter((w) => w !== item);
@@ -569,7 +610,7 @@ export async function runInteractiveList(
               selectedIndex,
               Math.max(0, filtered.length - 1),
             );
-            setupRawMode();
+            enterFullscreen();
             attachListener();
             interacting = false;
             render();
@@ -577,7 +618,7 @@ export async function runInteractiveList(
         } else if (key === 'p' || key === 'P') {
           interacting = true;
           detachListener();
-          cleanupRawMode();
+          leaveFullscreen();
           // Operate on the full set, not the search-filtered view, so a search
           // can't silently narrow what gets pruned.
           const removed = await handlers.onWipe(allItems);
@@ -601,14 +642,14 @@ export async function runInteractiveList(
             selectedIndex,
             Math.max(0, filtered.length - 1),
           );
-          setupRawMode();
+          enterFullscreen();
           attachListener();
           interacting = false;
           render();
         } else if (key === 'c' || key === 'C') {
           interacting = true;
           detachListener();
-          cleanupRawMode();
+          leaveFullscreen();
           await handlers.onCreate();
           allItems = await handlers.refreshItems();
           filtered = filterItems(allItems, query);
@@ -617,14 +658,14 @@ export async function runInteractiveList(
             Math.max(0, filtered.length - 1),
           );
           lastRefresh = refreshEnabled ? new Date() : lastRefresh;
-          setupRawMode();
+          enterFullscreen();
           attachListener();
           interacting = false;
           render();
         } else if (key === 'a' || key === 'A') {
           interacting = true;
           detachListener();
-          cleanupRawMode();
+          leaveFullscreen();
           await handlers.onAgent();
           allItems = await handlers.refreshItems();
           filtered = filterItems(allItems, query);
@@ -633,7 +674,7 @@ export async function runInteractiveList(
             Math.max(0, filtered.length - 1),
           );
           lastRefresh = refreshEnabled ? new Date() : lastRefresh;
-          setupRawMode();
+          enterFullscreen();
           attachListener();
           interacting = false;
           render();
@@ -653,7 +694,7 @@ export async function runInteractiveList(
       } catch (err) {
         stopRefresh();
         detachListener();
-        cleanupRawMode();
+        leaveFullscreen();
         reject(err);
       }
     };
