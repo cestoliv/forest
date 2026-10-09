@@ -85,18 +85,34 @@ program
     '--no-pull',
     'Skip pulling the main worktree after pruning merged worktrees',
   )
+  .option('--watch', 'Prune again on an interval until Ctrl-C')
+  .option(
+    '--interval <minutes>',
+    'Minutes between --watch passes; overrides auto_refresh_minutes',
+  )
   .action(
     async (
       branch: string | undefined,
-      options: { repo?: string; yes?: boolean; pull: boolean },
+      options: {
+        repo?: string;
+        yes?: boolean;
+        pull: boolean;
+        watch?: boolean;
+        interval?: string;
+      },
     ) => {
       const { runPrune } = await import('./commands/prune.js');
-      await runPrune({
+      const cancelled = await runPrune({
         branch,
         repo: options.repo,
         yes: options.yes,
         pull: options.pull,
+        watch: options.watch,
+        interval:
+          options.interval === undefined ? undefined : Number(options.interval),
       });
+      // Pending git/gh checks would keep the process alive after a cancel.
+      if (cancelled) process.exit(0);
     },
   );
 

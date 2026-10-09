@@ -1,16 +1,13 @@
 // src/lib/forge.test.ts
 import { describe, expect, it } from 'vitest';
 import {
-  buildClosedQuery,
-  buildMergedQuery,
   buildOpenQuery,
+  buildPullRequestQuery,
   type ForgeRunner,
+  fetchPullRequests,
   findOpenPullRequest,
-  hasClosedPullRequest,
-  hasMergedPullRequest,
-  parseClosedResult,
-  parseMergedResult,
   parseOpenResult,
+  parsePullRequests,
   parseRemoteHost,
   selectForgeTool,
 } from './forge.js';
@@ -73,43 +70,9 @@ describe('selectForgeTool', () => {
   });
 });
 
-describe('buildMergedQuery', () => {
-  it('builds a gh query filtered to merged PRs for the head and base branches', () => {
-    expect(buildMergedQuery('gh', 'feat/x', 'main')).toEqual([
-      'pr',
-      'list',
-      '--head',
-      'feat/x',
-      '--base',
-      'main',
-      '--state',
-      'merged',
-      '--json',
-      'number',
-    ]);
-  });
-
-  it('builds a glab query filtered to merged MRs for the source and target branches', () => {
-    expect(buildMergedQuery('glab', 'feat/x', 'main')).toEqual([
-      'mr',
-      'list',
-      '--merged',
-      '--source-branch',
-      'feat/x',
-      '--target-branch',
-      'main',
-      '-F',
-      'json',
-    ]);
-  });
-});
-
-describe('buildClosedQuery', () => {
-  it('builds a gh query over every state for the head and base branches', () => {
-    // Deliberately `--state all`, not `--state closed`: deciding "this branch is
-    // dead" needs to see a *still-open* PR on the same head/base too, and one
-    // query keeps both facts consistent (see `parseClosedResult`).
-    expect(buildClosedQuery('gh', 'feat/x', 'main')).toEqual([
+describe('buildPullRequestQuery', () => {
+  it('asks gh for every state, filtered by head and base, with the card fields', () => {
+    expect(buildPullRequestQuery('gh', 'feat/x', 'main')).toEqual([
       'pr',
       'list',
       '--head',
@@ -119,12 +82,12 @@ describe('buildClosedQuery', () => {
       '--state',
       'all',
       '--json',
-      'state',
+      'number,title,url,state,mergedAt,closedAt',
     ]);
   });
 
-  it('builds a glab query over every state for the source and target branches', () => {
-    expect(buildClosedQuery('glab', 'feat/x', 'main')).toEqual([
+  it('asks glab for every state, filtered by source and target', () => {
+    expect(buildPullRequestQuery('glab', 'feat/x', 'main')).toEqual([
       'mr',
       'list',
       '--all',
@@ -138,310 +101,175 @@ describe('buildClosedQuery', () => {
   });
 });
 
-describe('parseClosedResult', () => {
-  it('is true for a closed-unmerged PR (gh CLOSED)', () => {
-    expect(parseClosedResult('[{"state":"CLOSED"}]')).toBe(true);
+describe('parsePullRequests', () => {
+  const gh = (state: string, extra: Record<string, unknown> = {}) => ({
+    number: 12,
+    title: 'feat: x',
+    url: 'https://github.com/o/r/pull/12',
+    state,
+    ...extra,
   });
-
-  it('is false for a merged PR reported under gh --state closed (MERGED)', () => {
-    // gh models merged as a kind of closed, so `--state closed` returns it too;
-    // the parser MUST drop it.
-    expect(parseClosedResult('[{"state":"MERGED"}]')).toBe(false);
+  const glab = (state: string, extra: Record<string, unknown> = {}) => ({
+    iid: 7,
+    title: 'feat: y',
+    web_url: 'https://gitlab.com/o/r/-/merge_requests/7',
+    state,
+    ...extra,
   });
+  const parse = (prs: unknown[]) => parsePullRequests(JSON.stringify(prs));
 
-  it('is true for a closed MR (glab lowercase closed)', () => {
-    expect(parseClosedResult('[{"state":"closed"}]')).toBe(true);
-  });
-
-  it('is false for a merged MR (glab lowercase merged)', () => {
-    expect(parseClosedResult('[{"state":"merged"}]')).toBe(false);
-  });
-
-  it('is true when a mix of merged and closed entries is present', () => {
-    expect(parseClosedResult('[{"state":"MERGED"},{"state":"CLOSED"}]')).toBe(
-      true,
+  it('reads a merged gh PR, with its card data', () => {
+    expect(parse([gh('MERGED', { mergedAt: '2026-10-01T00:00:00Z' })])).toEqual(
+      {
+        merged: true,
+        closed: false,
+        latest: {
+          number: 12,
+          title: 'feat: x',
+          url: 'https://github.com/o/r/pull/12',
+          state: 'merged',
+          endedAt: '2026-10-01T00:00:00Z',
+        },
+      },
     );
   });
 
-  it('is false when a still-open PR accompanies the closed one (gh OPEN)', () => {
-    // The reopen/supersede workflow: PR #1 closed, PR #2 opened from the same
-    // branch. The branch is alive — the closed PR is stale, not a death notice.
-    expect(parseClosedResult('[{"state":"OPEN"},{"state":"CLOSED"}]')).toBe(
-      false,
-    );
+  it('reads a merged glab MR (iid, web_url, merged_at)', () => {
+    const result = parse([glab('merged', { merged_at: '2026-10-02' })]);
+    expect(result?.merged).toBe(true);
+    expect(result?.closed).toBe(false);
+    expect(result?.latest).toMatchObject({
+      number: 7,
+      url: 'https://gitlab.com/o/r/-/merge_requests/7',
+      endedAt: '2026-10-02',
+    });
   });
 
-  it('is false when a still-open MR accompanies the closed one (glab opened)', () => {
-    expect(parseClosedResult('[{"state":"opened"},{"state":"closed"}]')).toBe(
-      false,
-    );
+  it('reads a closed-unmerged PR/MR as closed, not merged', () => {
+    expect(parse([gh('CLOSED')])).toMatchObject({
+      merged: false,
+      closed: true,
+    });
+    expect(parse([glab('closed')])).toMatchObject({
+      merged: false,
+      closed: true,
+    });
   });
 
-  it('is false when an open PR accompanies a merged and a closed one', () => {
-    expect(
-      parseClosedResult(
-        '[{"state":"OPEN"},{"state":"MERGED"},{"state":"CLOSED"}]',
-      ),
-    ).toBe(false);
-  });
-
-  it('is false for an open PR alone', () => {
-    expect(parseClosedResult('[{"state":"OPEN"}]')).toBe(false);
-    expect(parseClosedResult('[{"state":"opened"}]')).toBe(false);
-  });
-
-  it('is false for an empty array', () => {
-    expect(parseClosedResult('[]')).toBe(false);
-  });
-
-  it('is false for non-array or unparseable output', () => {
-    expect(parseClosedResult('{"state":"CLOSED"}')).toBe(false);
-    expect(parseClosedResult('not json')).toBe(false);
-    expect(parseClosedResult('')).toBe(false);
-  });
-});
-
-describe('parseMergedResult', () => {
-  it('is true for a non-empty JSON array', () => {
-    expect(parseMergedResult('[{"number":15}]')).toBe(true);
-  });
-
-  it('is false for an empty array', () => {
-    expect(parseMergedResult('[]')).toBe(false);
-  });
-
-  it('is false for non-array or unparseable output', () => {
-    expect(parseMergedResult('{"number":1}')).toBe(false);
-    expect(parseMergedResult('not json')).toBe(false);
-    expect(parseMergedResult('')).toBe(false);
-  });
-});
-
-describe('hasMergedPullRequest', () => {
-  const runner = (url: string, out: string): ForgeRunner => ({
-    remoteUrl: () => url,
-    query: () => out,
-  });
-
-  it('returns true when the forge reports a merged PR/MR', () => {
-    expect(
-      hasMergedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner('git@git.chevro.fr:o/r.git', '[{"iid":15}]'),
-      ),
-    ).toBe(true);
-  });
-
-  it('returns false when the forge reports none', () => {
-    expect(
-      hasMergedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner('git@github.com:o/r.git', '[]'),
-      ),
-    ).toBe(false);
-  });
-
-  it('routes the query through the tool chosen for the host', () => {
-    let tool: string | undefined;
-    const spy: ForgeRunner = {
-      remoteUrl: () => 'git@github.com:o/r.git',
-      query: (_repo, t) => {
-        tool = t;
-        return '[{"number":1}]';
-      },
-    };
-    expect(hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', spy)).toBe(
-      true,
-    );
-    expect(tool).toBe('gh');
-  });
-
-  it('filters the query by the base branch as the PR target', () => {
-    // The caller does no ancestry check, so without this filter a branch merged
-    // into `develop` would be reported as merged into `main`.
-    let args: string[] | undefined;
-    const spy: ForgeRunner = {
-      remoteUrl: () => 'git@github.com:o/r.git',
-      query: (_repo, _tool, a) => {
-        args = a;
-        return '[{"number":1}]';
-      },
-    };
-    hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', spy);
-    expect(args?.join(' ')).toContain('--base main');
-  });
-
-  it('fails closed (false) when resolving the remote throws', () => {
-    const throwing: ForgeRunner = {
-      remoteUrl: () => {
-        throw new Error('no such remote');
-      },
-      query: () => '[{"number":1}]',
-    };
-    expect(
-      hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
-    ).toBe(false);
-  });
-
-  it('fails closed (false) when the query (CLI) throws or times out', () => {
-    const throwing: ForgeRunner = {
-      remoteUrl: () => 'git@github.com:o/r.git',
-      query: () => {
-        throw new Error('gh: command not found');
-      },
-    };
-    expect(
-      hasMergedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
-    ).toBe(false);
-  });
-
-  it('fails closed (false) when the host is unparseable', () => {
-    expect(
-      hasMergedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner('garbage', '[]'),
-      ),
-    ).toBe(false);
-  });
-});
-
-describe('hasClosedPullRequest', () => {
-  const runner = (url: string, out: string): ForgeRunner => ({
-    remoteUrl: () => url,
-    query: () => out,
-  });
-
-  it('returns true when the forge reports a closed-unmerged PR/MR', () => {
-    expect(
-      hasClosedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner('git@git.chevro.fr:o/r.git', '[{"state":"closed"}]'),
-      ),
-    ).toBe(true);
-  });
-
-  it('returns false when the forge reports only a merged PR (gh --state all)', () => {
-    expect(
-      hasClosedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner('git@github.com:o/r.git', '[{"state":"MERGED"}]'),
-      ),
-    ).toBe(false);
-  });
-
-  it('returns false when a closed PR is superseded by an open one on the same head', () => {
+  it('lets an open PR/MR on the same head veto closed', () => {
     // Regression: a stale closed PR must not read as "branch is dead" while a
     // newer PR from the same branch is still open.
-    expect(
-      hasClosedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner(
-          'git@github.com:o/r.git',
-          '[{"state":"OPEN"},{"state":"CLOSED"}]',
-        ),
-      ),
-    ).toBe(false);
+    expect(parse([gh('OPEN'), gh('CLOSED')])?.closed).toBe(false);
+    expect(parse([glab('opened'), glab('closed')])?.closed).toBe(false);
   });
 
-  it('returns false when the forge reports none', () => {
-    expect(
-      hasClosedPullRequest(
-        '/repo',
-        'feat/x',
-        'main',
-        'origin',
-        runner('git@github.com:o/r.git', '[]'),
-      ),
-    ).toBe(false);
+  it('reads mixed results: merged wins, closed needs a CLOSED besides MERGED', () => {
+    expect(parse([gh('MERGED'), gh('CLOSED')])).toMatchObject({
+      merged: true,
+      closed: true,
+    });
+    // gh models merged as a kind of closed: MERGED alone is not closed.
+    expect(parse([gh('MERGED')])?.closed).toBe(false);
   });
 
-  it('routes the query through the tool chosen for the host', () => {
-    let tool: string | undefined;
-    const spy: ForgeRunner = {
-      remoteUrl: () => 'git@github.com:o/r.git',
-      query: (_repo, t) => {
-        tool = t;
-        return '[{"state":"CLOSED"}]';
-      },
-    };
-    expect(hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', spy)).toBe(
-      true,
+  it('shows the first (newest) entry as latest', () => {
+    expect(
+      parse([gh('OPEN', { number: 2 }), gh('CLOSED', { number: 1 })])?.latest
+        ?.number,
+    ).toBe(2);
+  });
+
+  it('reads an empty list as no signal and no latest', () => {
+    expect(parse([])).toEqual({
+      merged: false,
+      closed: false,
+      latest: undefined,
+    });
+  });
+
+  it('returns null for unparseable or non-array output', () => {
+    expect(parsePullRequests('not json')).toBeNull();
+    expect(parsePullRequests('')).toBeNull();
+    expect(parsePullRequests('{"state":"CLOSED"}')).toBeNull();
+  });
+});
+
+describe('fetchPullRequests', () => {
+  const runner = (url: string, out: string): ForgeRunner => ({
+    remoteUrl: async () => url,
+    query: async () => out,
+  });
+
+  it('parses the forge answer', async () => {
+    const result = await fetchPullRequests(
+      '/repo',
+      'feat/x',
+      'main',
+      'origin',
+      runner('git@git.chevro.fr:o/r.git', '[{"iid":15,"state":"merged"}]'),
     );
-    expect(tool).toBe('gh');
+    expect(result?.merged).toBe(true);
   });
 
-  it('filters the query by the base branch as the PR target', () => {
+  it('routes the query through the tool for the host, filtered by base', async () => {
+    let tool: string | undefined;
     let args: string[] | undefined;
     const spy: ForgeRunner = {
-      remoteUrl: () => 'git@github.com:o/r.git',
-      query: (_repo, _tool, a) => {
+      remoteUrl: async () => 'git@github.com:o/r.git',
+      query: async (_repo, t, a) => {
+        tool = t;
         args = a;
-        return '[{"state":"CLOSED"}]';
+        return '[]';
       },
     };
-    hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', spy);
+    await fetchPullRequests('/repo', 'feat/x', 'main', 'origin', spy);
+    expect(tool).toBe('gh');
+    // The caller does no ancestry check, so without this filter a branch merged
+    // into `develop` would be reported as merged into `main`.
     expect(args?.join(' ')).toContain('--base main');
   });
 
-  it('fails closed (false) when resolving the remote throws', () => {
+  it('fails closed (null) when resolving the remote throws', async () => {
     const throwing: ForgeRunner = {
-      remoteUrl: () => {
+      remoteUrl: async () => {
         throw new Error('no such remote');
       },
-      query: () => '[{"state":"CLOSED"}]',
+      query: async () => '[{"state":"MERGED"}]',
     };
     expect(
-      hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
-    ).toBe(false);
+      await fetchPullRequests('/repo', 'feat/x', 'main', 'origin', throwing),
+    ).toBeNull();
   });
 
-  it('fails closed (false) when the query (CLI) throws or times out', () => {
+  it('fails closed (null) when the CLI is missing or times out', async () => {
     const throwing: ForgeRunner = {
-      remoteUrl: () => 'git@github.com:o/r.git',
-      query: () => {
+      remoteUrl: async () => 'git@github.com:o/r.git',
+      query: async () => {
         throw new Error('gh: command not found');
       },
     };
     expect(
-      hasClosedPullRequest('/repo', 'feat/x', 'main', 'origin', throwing),
-    ).toBe(false);
+      await fetchPullRequests('/repo', 'feat/x', 'main', 'origin', throwing),
+    ).toBeNull();
   });
 
-  it('fails closed (false) when the host is unparseable', () => {
+  it('fails closed (null) when the host is unparseable', async () => {
     expect(
-      hasClosedPullRequest(
+      await fetchPullRequests(
         '/repo',
         'feat/x',
         'main',
         'origin',
-        runner('garbage', '[{"state":"CLOSED"}]'),
+        runner('garbage', '[{"state":"MERGED"}]'),
       ),
-    ).toBe(false);
+    ).toBeNull();
   });
 });
 
 describe('findOpenPullRequest', () => {
   const runner = (url: string, out: string): ForgeRunner => ({
-    remoteUrl: () => url,
-    query: () => out,
+    remoteUrl: async () => url,
+    query: async () => out,
   });
 
   it('asks gh and glab for open PRs/MRs into the base only', () => {
@@ -469,9 +297,9 @@ describe('findOpenPullRequest', () => {
     expect(parseOpenResult('nope')).toBeUndefined();
   });
 
-  it('returns the open PR number, or undefined when the forge call fails', () => {
+  it('returns the open PR number, or undefined when the forge call fails', async () => {
     expect(
-      findOpenPullRequest(
+      await findOpenPullRequest(
         '/repo',
         'feat/x',
         'main',
@@ -480,9 +308,9 @@ describe('findOpenPullRequest', () => {
       ),
     ).toBe(42);
     expect(
-      findOpenPullRequest('/repo', 'feat/x', 'main', 'origin', {
-        remoteUrl: () => 'git@github.com:o/r.git',
-        query: () => {
+      await findOpenPullRequest('/repo', 'feat/x', 'main', 'origin', {
+        remoteUrl: async () => 'git@github.com:o/r.git',
+        query: async () => {
           throw new Error('offline');
         },
       }),

@@ -1,6 +1,7 @@
 // src/commands/list.ts
 
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import * as clack from '@clack/prompts';
 import pc from 'picocolors';
@@ -10,15 +11,17 @@ import {
   getEffectiveConfig,
   getGlobalConfig,
 } from '../lib/config.js';
+import { fetchPullRequests, type PullRequests } from '../lib/forge.js';
 import {
-  fetchRemote,
+  countCommitsAhead,
+  countDirtyFiles,
+  fetchRemoteAsync,
   getRepoRoot,
   hasNoUniqueCommits,
   hasRemoteTrackingRef,
-  isBranchClosed,
   isBranchMerged,
-  isBranchMergedOnForge,
   isWorktreeClean,
+  lastCommitAge,
   listWorktreeDirtyFiles,
   listWorktrees,
   pullFfOnly,
@@ -134,9 +137,11 @@ export async function runList(
         openIde(config.ide, config.ide_open_args, item.path);
       },
 
-      onDelete: (item) => deleteWorktree(item, store),
+      onDelete: async (item) =>
+        (await deleteWorktree(item, store)) === 'removed',
 
-      onWipe: (items) => wipeWorktrees(items, store, { fetch: true }),
+      onWipe: async (items) =>
+        (await wipeWorktrees(items, store, { fetch: true })).removed,
 
       onCreate: async () => {
         // Wizard: worktree (repo → branch). Esc steps back (repo picker) and
@@ -228,18 +233,23 @@ export async function runList(
 /**
  * Remove a single worktree with per-branch confirmation, running
  * `teardown_commands` first and force-confirming when git refuses (submodules
- * or dirty files). Returns true iff the worktree was removed. Shared by the
- * TUI single-delete (`D`) and the prune flow so both behave identically.
+ * or dirty files). Shared by the TUI single-delete (`D`) and the prune flow so
+ * both behave identically.
+ *
+ * Resolves `'cancelled'` when the user cancels any prompt (Ctrl-C/Esc), so
+ * prune can stop at once instead of moving on to the next worktree.
+ * `'declined'` covers a No answer and a removal git refused.
  *
  * `yes` answers every prompt with yes (`wt prune <branch> --yes`).
  * `initialValue` preselects the first prompt's answer: `wt prune <branch>`
- * passes `false` for a worktree no prune signal flags.
+ * passes `false` for a worktree no prune signal flags. `details` replaces the
+ * one-line first prompt with the prune card.
  */
 export async function deleteWorktree(
   item: Worktree,
   store: ConfigStore,
-  options: { yes?: boolean; initialValue?: boolean } = {},
-): Promise<boolean> {
+  options: { yes?: boolean; initialValue?: boolean; details?: PruneMatch } = {},
+): Promise<'removed' | 'declined' | 'cancelled'> {
   // Prune runs globally across every registered repo, so the same branch name
   // can appear in multiple projects (e.g. a `back` and a `front` repo sharing a
   // feature branch). Prefix the branch with the project (repo dir basename, the
@@ -247,19 +257,30 @@ export async function deleteWorktree(
   // unambiguous about which worktree it's about to remove.
   const name = `${path.basename(item.repoRoot)}/${item.branch}`;
 
+  let cancelled = false;
   const ask = async (message: string, initialValue?: boolean) => {
     if (options.yes) return true;
     const answer = await clack.confirm({ message, initialValue });
-    return !clack.isCancel(answer) && answer;
+    if (clack.isCancel(answer)) {
+      cancelled = true;
+      return false;
+    }
+    return answer;
   };
+  const notRemoved = () => (cancelled ? 'cancelled' : 'declined');
 
+  if (options.details && !options.yes) {
+    clack.note(formatPruneCard(item, options.details), pc.bold(name));
+  }
   if (
     !(await ask(
-      `Remove worktree ${pc.bold(name)}? This cannot be undone.`,
+      options.details
+        ? 'Remove this worktree?'
+        : `Remove worktree ${pc.bold(name)}? This cannot be undone.`,
       options.initialValue,
     ))
   )
-    return false;
+    return notRemoved();
 
   // Single success exit for all three removal paths (normal + two force
   // fallbacks): report the removal. The "your shell is now in a gone directory"
@@ -267,9 +288,9 @@ export async function deleteWorktree(
   // to the shell, and printed mid-delete it gets repainted over by the TUI's
   // next render. Each entry point prints it once at the end via
   // `warnIfCwdRemoved` instead.
-  const reportRemoved = (label: string): true => {
+  const reportRemoved = (label: string) => {
     console.log(pc.green(`${label} ${name}`));
-    return true;
+    return 'removed' as const;
   };
 
   // Stop the worktree's Orca agent/terminal first: a live PTY whose cwd sits
@@ -303,7 +324,7 @@ export async function deleteWorktree(
       clack.log.warn(
         `Teardown command failed: ${result.failedCommand} (exit code ${result.exitCode})`,
       );
-      if (!(await ask(`Delete ${pc.bold(name)} anyway?`))) return false;
+      if (!(await ask(`Delete ${pc.bold(name)} anyway?`))) return notRemoved();
     }
   }
 
@@ -315,11 +336,11 @@ export async function deleteWorktree(
     const reason = forceReason(msg, item.path, name);
     if (!reason) {
       console.error(pc.red(`✗ Failed to remove ${name}: ${msg}`));
-      return false;
+      return 'declined';
     }
 
     if (reason.warning) clack.log.warn(reason.warning);
-    if (!(await ask(reason.question))) return false;
+    if (!(await ask(reason.question))) return notRemoved();
     try {
       removeWorktree(item.repoRoot, item.path, true);
       return reportRemoved('✓ Force-removed');
@@ -327,7 +348,7 @@ export async function deleteWorktree(
       console.error(
         pc.red(`✗ Failed to force-remove ${name}: ${String(err2)}`),
       );
-      return false;
+      return 'declined';
     }
   }
 }
@@ -372,91 +393,217 @@ function forceReason(
 }
 
 /**
- * Pure filter: keep only worktrees that are safe prunable candidates (merged or
- * closed). Excludes the main worktree (`isMain`) and detached-HEAD worktrees —
- * both path-independent — then applies the injected `isPrunable` predicate. The
- * current worktree is **not** excluded: prune treats the worktree you launched
- * from like any other (the per-branch confirm in `deleteWorktree` is the guard).
+ * Pure filter: the worktrees prune may check. Excludes the main worktree
+ * (`isMain`) and detached-HEAD worktrees, both path-independent. The current
+ * worktree is **not** excluded: prune treats the worktree you launched from
+ * like any other (the per-branch confirm in `deleteWorktree` is the guard).
  */
-export function selectWipeCandidates(
-  items: Worktree[],
-  isPrunable: (wt: Worktree) => boolean,
-): Worktree[] {
-  return items.filter(
-    (wt) => !wt.isMain && wt.branch !== '(detached)' && isPrunable(wt),
-  );
+export function selectWipeCandidates(items: Worktree[]): Worktree[] {
+  return items.filter((wt) => !wt.isMain && wt.branch !== '(detached)');
 }
 
-/** The git/forge signals `buildPrunePredicate` consults, injectable for tests. */
+/** The git/forge calls `buildPrunePredicate` makes, injectable for tests. */
 export interface PruneDeps {
   isBranchMerged: typeof isBranchMerged;
   hasNoUniqueCommits: typeof hasNoUniqueCommits;
-  isWorktreeClean: typeof isWorktreeClean;
+  countDirtyFiles: typeof countDirtyFiles;
   hasRemoteTrackingRef: typeof hasRemoteTrackingRef;
-  isBranchMergedOnForge: typeof isBranchMergedOnForge;
-  isBranchClosed: typeof isBranchClosed;
+  fetchPullRequests: typeof fetchPullRequests;
+  countCommitsAhead: typeof countCommitsAhead;
+  lastCommitAge: typeof lastCommitAge;
+}
+
+/** Which of the four prune signals matched. */
+export type PruneReason = 'patch' | 'fast-forward' | 'pr-merged' | 'pr-closed';
+
+/** Why a worktree is prunable, plus what its prune card shows. */
+export interface PruneMatch {
+  reason: PruneReason;
+  /** Local name of the base branch (`main`). */
+  base: string;
+  /** `null` when the forge gave no data or the branch was never pushed. */
+  pullRequests: PullRequests | null;
+  ahead?: number;
+  lastCommit?: string;
+  /** Entries in `git status --porcelain`; `undefined` when git failed. */
+  dirtyFiles?: number;
 }
 
 /**
- * Build a per-worktree "is prunable" predicate. A worktree is prunable when any
- * of these holds, checked in order so the two offline signals short-circuit the
- * two (network) forge lookups away:
+ * Build a per-worktree prune check. It resolves a `PruneMatch` when any of
+ * these holds, checked in order so the offline signals short-circuit the
+ * (network) forge lookup away, and `null` otherwise:
  *
- * 1. `isBranchMerged` — git proves it by patch id (squash / rebase merge).
+ * 1. `patch` — `isBranchMerged`: git proves it by patch id (squash / rebase).
  *
- * 2. The branch has no commits base doesn't already have (`hasNoUniqueCommits`:
- *    fast-forward or merge-commit merge, or a branch sitting on base's tip)
- *    **and** the worktree is clean **and** the branch was pushed. Git alone
- *    cannot separate "merged by fast-forward" from "fresh worktree holding only
- *    uncommitted work" — both have zero unique commits — so the worktree's dirty
- *    state is the discriminator, and requiring a remote-tracking ref keeps a
- *    just-created `wt create foo` from being offered for deletion. (The cost:
- *    an abandoned never-pushed worktree stays unprunable.)
+ * 2. `fast-forward` — the branch has no commits base doesn't already have
+ *    (`hasNoUniqueCommits`: fast-forward or merge-commit merge, or a branch
+ *    sitting on base's tip) **and** the worktree is clean **and** the branch was
+ *    pushed. Git alone cannot separate "merged by fast-forward" from "fresh
+ *    worktree holding only uncommitted work" — both have zero unique commits —
+ *    so the dirty state is the discriminator, and requiring a remote-tracking
+ *    ref keeps a just-created `wt create foo` from being offered for deletion.
  *
- * 3. `isBranchMergedOnForge` — the forge reports a merged PR/MR targeting base.
- *    Needed when a squash was rebased onto a newer base: its patch id matches
- *    nothing and the branch stays *ahead* of base, so both git signals above are
- *    false.
+ * 3. `pr-merged` — the forge reports a merged PR/MR targeting base. Needed when
+ *    a squash was rebased onto a newer base: its patch id matches nothing and
+ *    the branch stays *ahead* of base, so both git signals above are false.
  *
- * 4. `isBranchClosed` — a PR/MR targeting base was closed without merging (dead
- *    branch).
+ * 4. `pr-closed` — a PR/MR targeting base was closed without merging and none
+ *    is still open (dead branch).
  *
- * Every signal is scoped to the worktree's own repo's effective `base_branch`:
- * the git ones by construction, the forge ones because the PR/MR query filters
- * on the base as its target branch (a branch merged into `develop` is therefore
- * not prunable against `main`). A worktree sitting on the base branch itself is
- * never a candidate.
+ * 3 and 4 share one forge query (`fetchPullRequests`), skipped for a branch
+ * that was never pushed (it cannot have a PR/MR). They do no topology check, so
+ * the query filters on base's local name as the PR/MR *target*: a branch
+ * merged into `develop` is not prunable against `main`. A worktree on the base
+ * branch itself is never a candidate.
+ *
+ * On a match it also gathers the card data (PR, commits ahead, last commit,
+ * dirty count) so the prompt renders with no delay. A git-only match runs the
+ * forge query here for the card only.
  */
 export function buildPrunePredicate(
   store: ConfigStore,
   deps: Partial<PruneDeps> = {},
-): (wt: Worktree) => boolean {
-  const {
-    isBranchMerged: merged = isBranchMerged,
-    hasNoUniqueCommits: noUnique = hasNoUniqueCommits,
-    isWorktreeClean: clean = isWorktreeClean,
-    hasRemoteTrackingRef: pushed = hasRemoteTrackingRef,
-    isBranchMergedOnForge: mergedOnForge = isBranchMergedOnForge,
-    isBranchClosed: closed = isBranchClosed,
-  } = deps;
-
-  return (wt) => {
-    const config = getEffectiveConfig(wt.repoRoot, store);
-    const base = config.base_branch;
-    const { remote, branch: baseLocal } = splitBaseRef(base);
-    if (wt.branch === base || wt.branch === baseLocal) return false;
-
-    if (merged(wt.repoRoot, wt.branch, base)) return true;
-    if (
-      noUnique(wt.repoRoot, wt.branch, base) &&
-      clean(wt.path) &&
-      pushed(wt.repoRoot, remote, wt.branch)
-    )
-      return true;
-    if (mergedOnForge(wt.repoRoot, wt.branch, base)) return true;
-    if (closed(wt.repoRoot, wt.branch, base)) return true;
-    return false;
+): (wt: Worktree) => Promise<PruneMatch | null> {
+  const d: PruneDeps = {
+    isBranchMerged,
+    hasNoUniqueCommits,
+    countDirtyFiles,
+    hasRemoteTrackingRef,
+    fetchPullRequests,
+    countCommitsAhead,
+    lastCommitAge,
+    ...deps,
   };
+
+  return async (wt) => {
+    const base = getEffectiveConfig(wt.repoRoot, store).base_branch;
+    const { remote, branch: baseLocal } = splitBaseRef(base);
+    if (wt.branch === base || wt.branch === baseLocal) return null;
+
+    let dirty: Promise<number | undefined> | undefined;
+    const dirtyFiles = () => {
+      dirty ??= d.countDirtyFiles(wt.path);
+      return dirty;
+    };
+    let pushed: Promise<boolean> | undefined;
+    const isPushed = () => {
+      pushed ??= d.hasRemoteTrackingRef(wt.repoRoot, remote, wt.branch);
+      return pushed;
+    };
+    let prs: Promise<PullRequests | null> | undefined;
+    const pullRequests = () => {
+      prs ??= isPushed().then((p) =>
+        p
+          ? d.fetchPullRequests(wt.repoRoot, wt.branch, baseLocal, remote)
+          : null,
+      );
+      return prs;
+    };
+
+    let reason: PruneReason | undefined;
+    if (await d.isBranchMerged(wt.repoRoot, wt.branch, base)) reason = 'patch';
+    else if (
+      (await d.hasNoUniqueCommits(wt.repoRoot, wt.branch, base)) &&
+      (await dirtyFiles()) === 0 &&
+      (await isPushed())
+    )
+      reason = 'fast-forward';
+    else if ((await pullRequests())?.merged) reason = 'pr-merged';
+    else if ((await pullRequests())?.closed) reason = 'pr-closed';
+    if (!reason) return null;
+
+    const [pullRequestsResult, ahead, lastCommit, dirtyCount] =
+      await Promise.all([
+        pullRequests(),
+        d.countCommitsAhead(wt.repoRoot, wt.branch, base),
+        d.lastCommitAge(wt.repoRoot, wt.branch),
+        dirtyFiles(),
+      ]);
+    return {
+      reason,
+      base: baseLocal,
+      pullRequests: pullRequestsResult,
+      ahead,
+      lastCommit,
+      dirtyFiles: dirtyCount,
+    };
+  };
+}
+
+/** `3 days ago` for an ISO date, against `now`. */
+export function formatAge(iso: string, now = Date.now()): string {
+  const seconds = Math.round((Date.parse(iso) - now) / 1000);
+  if (Number.isNaN(seconds)) return '';
+  const units: [Intl.RelativeTimeFormatUnit, number][] = [
+    ['year', 31536000],
+    ['month', 2592000],
+    ['week', 604800],
+    ['day', 86400],
+    ['hour', 3600],
+    ['minute', 60],
+  ];
+  const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+  for (const [unit, size] of units) {
+    if (Math.abs(seconds) >= size)
+      return rtf.format(Math.round(seconds / size), unit);
+  }
+  return rtf.format(seconds, 'second');
+}
+
+/** The body of the prune card shown above the confirm (title: the worktree). */
+export function formatPruneCard(
+  wt: Worktree,
+  match: PruneMatch,
+  now = Date.now(),
+): string {
+  const reasons: Record<PruneReason, string> = {
+    patch: `merged (patch in ${match.base})`,
+    'fast-forward': 'fast-forward merged',
+    'pr-merged': `PR merged into ${match.base}`,
+    'pr-closed': 'PR closed without merge',
+  };
+  const row = (label: string, value: string) =>
+    `${pc.dim(label.padEnd(8))} ${value}`;
+  const lines = [row('Reason', reasons[match.reason])];
+
+  const pr = match.pullRequests?.latest;
+  if (pr) {
+    lines.push(row('PR', `#${pr.number} ${pr.title}`));
+    if (pr.url) lines.push(row('', pc.cyan(pr.url)));
+    const age = pr.endedAt ? formatAge(pr.endedAt, now) : '';
+    lines.push(row('Status', age ? `${pr.state} ${age}` : pr.state));
+  } else {
+    lines.push(row('PR', pc.dim('none found')));
+  }
+
+  const commits = [
+    match.ahead === undefined
+      ? undefined
+      : `${match.ahead} ahead of ${match.base}`,
+    match.lastCommit && `last commit ${match.lastCommit}`,
+  ].filter(Boolean);
+  if (commits.length > 0) lines.push(row('Commits', commits.join(' · ')));
+
+  const home = homedir();
+  const shownPath =
+    wt.path === home || wt.path.startsWith(home + path.sep)
+      ? `~${wt.path.slice(home.length)}`
+      : wt.path;
+  lines.push(row('Path', shownPath));
+
+  const dirty = match.dirtyFiles;
+  lines.push(
+    row(
+      'State',
+      dirty === 0
+        ? 'clean'
+        : pc.yellow(
+            dirty === undefined ? 'unknown' : `${dirty} uncommitted file(s)`,
+          ),
+    ),
+  );
+  return lines.join('\n');
 }
 
 /** The git helpers `pullMainWorktrees` consults, injectable for tests. */
@@ -532,14 +679,18 @@ export async function pullMainWorktrees(
 }
 
 /**
- * Best-effort fetch of each repo's base remote, once per repo, so merge
- * detection sees up-to-date refs. A missing remote or a failed fetch only warns.
+ * Best-effort fetch of each repo's base remote, once per repo and all in
+ * parallel, so merge detection sees up-to-date refs. A missing remote or a
+ * failed fetch only warns. Returns one promise per repo root (never rejects),
+ * so each worktree waits only for its own repo.
  */
-export function fetchRepos(items: Worktree[], store: ConfigStore): void {
-  const seen = new Set<string>();
+export function fetchRepos(
+  items: Worktree[],
+  store: ConfigStore,
+): Map<string, Promise<void>> {
+  const fetches = new Map<string, Promise<void>>();
   for (const wt of items) {
-    if (seen.has(wt.repoRoot)) continue;
-    seen.add(wt.repoRoot);
+    if (fetches.has(wt.repoRoot)) continue;
     const parts = getEffectiveConfig(wt.repoRoot, store).base_branch.split(
       '/',
       2,
@@ -554,46 +705,124 @@ export function fetchRepos(items: Worktree[], store: ConfigStore): void {
       );
       continue;
     }
-    try {
-      fetchRemote(wt.repoRoot, remote);
-    } catch (err) {
-      console.warn(
-        pc.yellow(
-          `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
-        ),
-      );
-    }
+    fetches.set(
+      wt.repoRoot,
+      fetchRemoteAsync(wt.repoRoot, remote).catch((err) => {
+        console.warn(
+          pc.yellow(
+            `⚠ Could not fetch from ${remote} — using local state${err instanceof Error ? ` (${err.message})` : ''}`,
+          ),
+        );
+      }),
+    );
   }
+  return fetches;
 }
 
+/** How many worktrees `wipeWorktrees` checks at once. */
+const CHECK_CONCURRENCY = 6;
+
 /**
- * Find every merged worktree among `items` and remove it via `deleteWorktree`
- * (per-branch confirmation + force-confirmation). Optionally best-effort
- * fetches each repo's remote first so merge detection sees up-to-date refs.
- * After a successful wipe, unless `pull` is false, fast-forwards each affected
- * repo's main worktree (`pullMainWorktrees`). Returns the worktrees that were
- * actually removed.
+ * Find every prunable worktree among `items` and remove it via
+ * `deleteWorktree` (prune card + per-branch confirmation + force-confirmation).
+ *
+ * Streams: repos fetch in parallel (when `fetch` is set), worktrees are checked
+ * `CHECK_CONCURRENCY` at a time in `items` order, and each match is prompted as
+ * soon as it is found while the checks continue. Prompts never overlap. A
+ * spinner shows progress while nothing is ready to prompt.
+ *
+ * A cancel (Ctrl-C at a prompt or at the spinner) stops at once: no more
+ * prompts, no pull, and pending check results are discarded. Otherwise, once
+ * every check is done and the last prompt answered, fast-forwards each
+ * affected repo's main worktree (`pullMainWorktrees`) unless `pull` is false.
+ * `quiet` drops the "nothing to wipe" line (watch mode).
  */
 export async function wipeWorktrees(
   items: Worktree[],
   store: ConfigStore,
-  options: { fetch?: boolean; pull?: boolean } = {},
-): Promise<Worktree[]> {
-  if (options.fetch) fetchRepos(items, store);
+  options: {
+    fetch?: boolean;
+    pull?: boolean;
+    quiet?: boolean;
+    deps?: Partial<PruneDeps>;
+  } = {},
+): Promise<{ removed: Worktree[]; cancelled: boolean }> {
+  const fetches = options.fetch
+    ? fetchRepos(items, store)
+    : new Map<string, Promise<void>>();
+  const predicate = buildPrunePredicate(store, options.deps);
+  const queue = selectWipeCandidates(items);
+  const ready: { wt: Worktree; match: PruneMatch }[] = [];
+  let checked = 0;
+  let next = 0;
+  let checking = true;
+  let cancelled = false;
+  let wake: (() => void) | undefined;
+  const notify = () => {
+    wake?.();
+    wake = undefined;
+  };
 
-  const candidates = selectWipeCandidates(items, buildPrunePredicate(store));
-  if (candidates.length === 0) {
-    console.log(pc.dim('No merged or closed worktrees to wipe.'));
-    return [];
-  }
+  const progress = () => `Checking worktrees… (${checked}/${queue.length})`;
+  const spin = clack.spinner({
+    onCancel: () => {
+      cancelled = true;
+      notify();
+    },
+  });
+  let spinning = false;
+
+  const worker = async () => {
+    while (next < queue.length && !cancelled) {
+      const wt = queue[next++];
+      await fetches.get(wt.repoRoot);
+      const match = await predicate(wt).catch(() => null);
+      checked++;
+      if (spinning) spin.message(progress());
+      if (match && !cancelled) ready.push({ wt, match });
+      notify();
+    }
+  };
+  void Promise.all(
+    Array.from({ length: CHECK_CONCURRENCY }, () => worker()),
+  ).then(() => {
+    checking = false;
+    notify();
+  });
 
   const removed: Worktree[] = [];
-  for (const candidate of candidates) {
-    if (await deleteWorktree(candidate, store)) {
-      removed.push(candidate);
+  let found = 0;
+  while (!cancelled) {
+    const candidate = ready.shift();
+    if (!candidate) {
+      if (!checking) break;
+      const woken = new Promise<void>((resolve) => {
+        wake = resolve;
+      });
+      if (!spinning) {
+        spin.start(progress());
+        spinning = true;
+      }
+      await woken;
+      continue;
     }
+    if (spinning) {
+      spin.clear();
+      spinning = false;
+    }
+    found++;
+    const result = await deleteWorktree(candidate.wt, store, {
+      details: candidate.match,
+    });
+    if (result === 'cancelled') cancelled = true;
+    if (result === 'removed') removed.push(candidate.wt);
   }
+  if (spinning) spin.clear();
+  if (cancelled) return { removed, cancelled };
 
+  if (found === 0 && !options.quiet) {
+    console.log(pc.dim('No merged or closed worktrees to wipe.'));
+  }
   if (removed.length > 0 && (options.pull ?? true)) {
     await pullMainWorktrees(
       items,
@@ -601,7 +830,7 @@ export async function wipeWorktrees(
       store,
     );
   }
-  return removed;
+  return { removed, cancelled };
 }
 
 /** The nearest ancestor of `p` that still exists on disk (the filesystem root

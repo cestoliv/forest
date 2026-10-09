@@ -137,7 +137,7 @@ daemon) it starts the agent in the existing worktree, which is what a human
 picks there. `wt create` has no agent to fall back on, so a non-interactive run
 still errors with a non-zero exit.
 
-### `wt prune [branch] [--repo <path>] [-y] [--no-pull]`
+### `wt prune [branch] [--repo <path>] [-y] [--no-pull] [--watch] [--interval <minutes>]`
 
 Remove every worktree whose branch has already been merged into the base
 branch (`base_branch`, default `origin/main`), **or** whose PR/MR was closed
@@ -161,8 +161,21 @@ probes `orca status` and never launches Orca; if Orca is down, not installed, or
 never saw that worktree (e.g. a Zed worktree), it is a silent no-op and can
 never fail a deletion.
 
+Prune fetches every repo in parallel, checks up to six worktrees at a time, and
+prompts for each match as soon as it is found (the checks continue during the
+prompt). Each prompt shows a card: the matched reason, the latest PR/MR (title,
+link, status, or `none found`), commits ahead of base, the last commit age, the
+path, and the clean/dirty state. Ctrl-C at a prompt or at the spinner stops the
+whole prune: no other prompt, no pull.
+
+`--watch` prunes, waits, and prunes again until Ctrl-C. The wait is
+`auto_refresh_minutes` (default `5`); `--interval <minutes>` overrides it
+(a positive number, only with `--watch`). Each pass lists worktrees again and
+asks again about a declined one. Passes never overlap.
+
 ```bash
-wt prune   # review and remove merged worktrees, one prompt per branch
+wt prune                       # review and remove merged worktrees, one prompt per branch
+wt prune --watch --interval 1  # prune again every minute until Ctrl-C
 ```
 
 #### Remove one branch's worktree
@@ -212,7 +225,7 @@ first so the network is often not touched at all.
    routine, and the superseded PR must not read as a death notice for a branch
    that is still in review.
 
-(3) and (4) only count a PR/MR whose target branch is the configured
+(3) and (4) share one forge query per worktree and only count a PR/MR whose target branch is the configured
 `base_branch`, so a branch merged into `develop` is not prunable against `main`.
 Both are skipped for never-pushed branches, and every signal fails closed
 (CLI missing, offline, unresolvable base ref ⇒ not pruned). `wt prune`

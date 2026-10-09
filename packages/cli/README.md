@@ -46,6 +46,7 @@ wt agent fix-bug "Fix bug" --mode auto    # Use auto mode instead of the default
 wt agent big-job "Plan it" --model fable  # Bigger model for one run
 wt prune                                  # Remove merged worktrees (per-branch confirm)
 wt prune my-feat                          # Remove one branch's worktree, merged or not
+wt prune --watch                          # Prune again every few minutes until Ctrl-C
 wt count                                  # Count worktrees, total and per repo
 wt config                                 # Edit config in $EDITOR
 wt skill                                  # Print the skill file (for AI agents)
@@ -182,6 +183,47 @@ erroring (in a non-interactive shell it exits non-zero).
 wt prune   # remove every merged worktree, one confirmation per branch
 ```
 
+### What a prune run shows
+
+Prune fetches every repo in parallel and checks up to six worktrees at a time.
+The first prompt shows as soon as one worktree is proven prunable. The checks
+continue while the prompt is open, and a spinner shows the progress
+(`Checking worktrees… (3/20)`) while nothing is ready to prompt.
+
+Each prompt shows a card above `Remove this worktree?`:
+
+```
+my-repo/feat-sso
+  Reason   PR merged into main
+  PR       #123 feat(auth): add SSO login
+           https://github.com/org/repo/pull/123
+  Status   merged 3 days ago
+  Commits  4 ahead of main · last commit 5 days ago
+  Path     ~/dev/my-repo-feat-sso
+  State    clean
+```
+
+`Reason` names the signal that matched (see the four signals below). `PR` reads
+`none found` when the forge gave no data. A dirty worktree shows its count of
+uncommitted files in yellow.
+
+Ctrl-C stops the whole prune, at a prompt or at the spinner: no other prompt
+shows and no pull runs. In the TUI, `P` then returns to the list.
+
+### Watch mode — `wt prune --watch`
+
+```bash
+wt prune --watch               # prune now, then again every auto_refresh_minutes
+wt prune --watch --interval 1  # check every minute
+```
+
+`--watch` runs one prune, waits, and runs again until you press Ctrl-C. The
+wait is the global `auto_refresh_minutes` key (default `5`); `--interval
+<minutes>` overrides it for the run. Each pass lists the worktrees again, so new
+worktrees and repos show up. A worktree you decline is asked about again on the
+next pass. The wait starts only after a pass ends, so an open prompt holds the
+next pass. `--no-pull` applies to every pass.
+
 ### Remove one branch's worktree
 
 `wt prune <branch>` removes the worktree checked out on `<branch>`, merged or
@@ -256,7 +298,7 @@ run first, so most branches are decided without touching the network:
   from the same branch is routine, and the superseded PR must not read as a
   death notice for work that is still in review.
 
-Both forge lookups only count a PR/MR whose target is your configured
+Both forge signals come from one query per worktree and only count a PR/MR whose target is your configured
 `base_branch`, so a branch merged into `develop` is never reported prunable
 against `main`. Both are skipped for never-pushed branches (they can't have a
 PR/MR), and everything **fails closed**: offline, missing CLI, or an

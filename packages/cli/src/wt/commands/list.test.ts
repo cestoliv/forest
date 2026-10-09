@@ -7,25 +7,29 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import path from 'node:path';
 import * as clack from '@clack/prompts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, setGlobalConfig } from '../lib/config.js';
+import type { PullRequests } from '../lib/forge.js';
 import { pullFfOnly, removeWorktree, type Worktree } from '../lib/git.js';
 import { stopOrcaWorktree } from '../lib/orca.js';
 import { runCommands } from '../lib/setup.js';
 import {
   buildPrunePredicate,
   deleteWorktree,
+  formatAge,
+  formatPruneCard,
   type PruneDeps,
+  type PruneMatch,
   prepareListItems,
   pullMainWorktrees,
   selectWipeCandidates,
   warnIfCwdRemoved,
   wipeWorktrees,
 } from './list.js';
-import { runPrune } from './prune.js';
+import { runPrune, watchPrune } from './prune.js';
 
 // deleteWorktree prompts to confirm removal; auto-confirm so the teardown path
 // runs. The pure list tests don't touch clack, so a module mock is safe.
@@ -33,6 +37,13 @@ vi.mock('@clack/prompts', () => ({
   confirm: vi.fn(async () => true),
   isCancel: vi.fn(() => false),
   log: { warn: vi.fn() },
+  note: vi.fn(),
+  spinner: vi.fn(() => ({
+    start: vi.fn(),
+    stop: vi.fn(),
+    message: vi.fn(),
+    clear: vi.fn(),
+  })),
 }));
 
 // No `orca` process is ever spawned from tests; the real behaviour lives in
@@ -197,7 +208,7 @@ describe('deleteWorktree (teardown templating)', () => {
     };
     const removed = await deleteWorktree(item, store);
 
-    expect(removed).toBe(true);
+    expect(removed).toBe('removed');
     expect(existsSync(path.join(tmpDir, 'feature.teardown'))).toBe(true);
   });
 });
@@ -437,7 +448,7 @@ describe('deleteWorktree (Orca teardown)', () => {
       isMain: false,
       repoRoot: repoDir,
     };
-    expect(await deleteWorktree(item, store)).toBe(true);
+    expect(await deleteWorktree(item, store)).toBe('removed');
 
     expect(stopOrcaWorktree).toHaveBeenCalledWith({ worktreePath: wtPath });
     expect(firstCallOrder(stopOrcaWorktree)).toBeLessThan(
@@ -466,7 +477,7 @@ describe('deleteWorktree (Orca teardown)', () => {
     setGlobalConfig({ teardown_commands: ['true'] }, store);
     vi.mocked(clack.confirm).mockResolvedValueOnce(false);
 
-    expect(await deleteWorktree(makeWorktree(), store)).toBe(false);
+    expect(await deleteWorktree(makeWorktree(), store)).toBe('declined');
 
     expect(stopOrcaWorktree).not.toHaveBeenCalled();
     expect(runCommands).not.toHaveBeenCalled();
@@ -478,7 +489,7 @@ describe('deleteWorktree (Orca teardown)', () => {
     setGlobalConfig({ teardown_commands: ['true'] }, store);
     vi.mocked(clack.isCancel).mockReturnValueOnce(true);
 
-    expect(await deleteWorktree(makeWorktree(), store)).toBe(false);
+    expect(await deleteWorktree(makeWorktree(), store)).toBe('cancelled');
 
     expect(stopOrcaWorktree).not.toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
@@ -499,7 +510,7 @@ describe('deleteWorktree (Orca teardown)', () => {
       isMain: false,
       repoRoot: repoDir,
     };
-    expect(await deleteWorktree(item, store)).toBe(true);
+    expect(await deleteWorktree(item, store)).toBe('removed');
     expect(removeWorktree).toHaveBeenCalled();
     expect(existsSync(wtPath)).toBe(false);
   });
@@ -509,7 +520,7 @@ describe('deleteWorktree (Orca teardown)', () => {
     const item = makeMergedWorktree();
     setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
 
-    const removed = await wipeWorktrees([item], store);
+    const { removed } = await wipeWorktrees([item], store);
 
     expect(removed.map((w) => w.branch)).toEqual(['feature']);
     expect(stopOrcaWorktree).toHaveBeenCalledWith({
@@ -528,103 +539,212 @@ describe('buildPrunePredicate', () => {
     ...over,
   });
 
-  /** Stub every signal to a fixed answer, recording which ones were consulted. */
-  const stubDeps = (
-    answers: Partial<Record<keyof PruneDeps, boolean>>,
-  ): { deps: PruneDeps; called: Set<keyof PruneDeps> } => {
+  const prs = (over: Partial<PullRequests> = {}): PullRequests => ({
+    merged: false,
+    closed: false,
+    latest: {
+      number: 12,
+      title: 'feat: x',
+      url: 'https://github.com/o/r/pull/12',
+      state: 'merged',
+    },
+    ...over,
+  });
+
+  /** Stub every git/forge call, recording which ones were consulted. */
+  const stubDeps = (answers: {
+    merged?: boolean;
+    noUnique?: boolean;
+    dirty?: number;
+    pushed?: boolean;
+    pullRequests?: PullRequests | null;
+  }) => {
     const called = new Set<keyof PruneDeps>();
-    const stub = (name: keyof PruneDeps) => () => {
-      called.add(name);
-      return answers[name] ?? false;
-    };
-    return {
-      deps: {
-        isBranchMerged: stub('isBranchMerged'),
-        hasNoUniqueCommits: stub('hasNoUniqueCommits'),
-        isWorktreeClean: stub('isWorktreeClean'),
-        hasRemoteTrackingRef: stub('hasRemoteTrackingRef'),
-        isBranchMergedOnForge: stub('isBranchMergedOnForge'),
-        isBranchClosed: stub('isBranchClosed'),
+    let forgeArgs: string[] = [];
+    const deps: PruneDeps = {
+      isBranchMerged: async () => {
+        called.add('isBranchMerged');
+        return answers.merged ?? false;
       },
-      called,
+      hasNoUniqueCommits: async () => {
+        called.add('hasNoUniqueCommits');
+        return answers.noUnique ?? false;
+      },
+      countDirtyFiles: async () => answers.dirty ?? 1,
+      hasRemoteTrackingRef: async () => answers.pushed ?? false,
+      fetchPullRequests: async (_repo, _branch, baseLocal, remote) => {
+        called.add('fetchPullRequests');
+        forgeArgs = [baseLocal, remote ?? ''];
+        return answers.pullRequests ?? null;
+      },
+      countCommitsAhead: async () => 3,
+      lastCommitAge: async () => '2 days ago',
     };
+    return { deps, called, forgeArgs: () => forgeArgs };
   };
 
-  const storeWithBase = () => {
+  const storeWithBase = (base = 'origin/main') => {
     const store = createStore(path.join(tmpDir, 'config'));
-    setGlobalConfig({ base_branch: 'origin/main' }, store);
+    setGlobalConfig({ base_branch: base }, store);
     return store;
   };
 
-  it('never prunes a worktree on the base branch itself, without asking any signal', () => {
-    const { deps, called } = stubDeps({ isBranchMerged: true });
+  it('never prunes a worktree on the base branch itself, without asking any signal', async () => {
+    const { deps, called } = stubDeps({ merged: true });
     expect(
-      buildPrunePredicate(storeWithBase(), deps)(wt({ branch: 'origin/main' })),
-    ).toBe(false);
+      await buildPrunePredicate(
+        storeWithBase(),
+        deps,
+      )(wt({ branch: 'origin/main' })),
+    ).toBeNull();
     expect(called.size).toBe(0);
   });
 
-  it('never prunes a worktree on the local base branch', () => {
-    const { deps } = stubDeps({ isBranchMerged: true });
+  it('never prunes a worktree on the local base branch', async () => {
+    const { deps } = stubDeps({ merged: true });
     expect(
-      buildPrunePredicate(storeWithBase(), deps)(wt({ branch: 'main' })),
-    ).toBe(false);
+      await buildPrunePredicate(storeWithBase(), deps)(wt({ branch: 'main' })),
+    ).toBeNull();
   });
 
-  it('prunes a branch git proves merged, without any forge call', () => {
-    const { deps, called } = stubDeps({ isBranchMerged: true });
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
-    expect(called.has('isBranchMergedOnForge')).toBe(false);
-    expect(called.has('isBranchClosed')).toBe(false);
-  });
-
-  it('prunes a clean, pushed branch with no unique commits, without any forge call', () => {
-    const { deps, called } = stubDeps({
-      hasNoUniqueCommits: true,
-      isWorktreeClean: true,
-      hasRemoteTrackingRef: true,
+  it('reports `patch` with the card data, and skips the forge for an unpushed branch', async () => {
+    const { deps, called } = stubDeps({ merged: true, dirty: 0 });
+    expect(await buildPrunePredicate(storeWithBase(), deps)(wt())).toEqual({
+      reason: 'patch',
+      base: 'main',
+      pullRequests: null,
+      ahead: 3,
+      lastCommit: '2 days ago',
+      dirtyFiles: 0,
     });
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
-    expect(called.has('isBranchMergedOnForge')).toBe(false);
-    expect(called.has('isBranchClosed')).toBe(false);
+    expect(called.has('fetchPullRequests')).toBe(false);
   });
 
-  it('does not prune a dirty worktree with no unique commits', () => {
+  it('reports `fast-forward` for a clean, pushed branch with no unique commits, and asks the forge for the card', async () => {
+    const { deps } = stubDeps({
+      noUnique: true,
+      dirty: 0,
+      pushed: true,
+      pullRequests: prs(),
+    });
+    const match = await buildPrunePredicate(storeWithBase(), deps)(wt());
+    expect(match?.reason).toBe('fast-forward');
+    expect(match?.pullRequests?.latest?.number).toBe(12);
+  });
+
+  it('does not prune a dirty worktree with no unique commits', async () => {
     // Only uncommitted work: identical to a merged fast-forward at the branch
     // level, so the dirty state is what keeps it. Falls through to the forge.
     const { deps, called } = stubDeps({
-      hasNoUniqueCommits: true,
-      isWorktreeClean: false,
-      hasRemoteTrackingRef: true,
+      noUnique: true,
+      dirty: 2,
+      pushed: true,
     });
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(false);
-    expect(called.has('isBranchMergedOnForge')).toBe(true);
+    expect(await buildPrunePredicate(storeWithBase(), deps)(wt())).toBeNull();
+    expect(called.has('fetchPullRequests')).toBe(true);
   });
 
-  it('does not prune a never-pushed branch with no unique commits', () => {
-    // A just-created `wt create foo` worktree must survive `wt prune`.
-    const { deps, called } = stubDeps({
-      hasNoUniqueCommits: true,
-      isWorktreeClean: true,
-      hasRemoteTrackingRef: false,
+  it('does not prune, nor ask the forge about, a never-pushed branch', async () => {
+    // A just-created `wt create foo` worktree must survive `wt prune`, and a
+    // branch with no remote-tracking ref cannot have a PR/MR.
+    const { deps, called } = stubDeps({ noUnique: true, dirty: 0 });
+    expect(await buildPrunePredicate(storeWithBase(), deps)(wt())).toBeNull();
+    expect(called.has('fetchPullRequests')).toBe(false);
+  });
+
+  it('reports `pr-merged` for a branch only the forge knows is merged, asking with the local base and the remote', async () => {
+    const { deps, forgeArgs } = stubDeps({
+      pushed: true,
+      pullRequests: prs({ merged: true }),
     });
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(false);
-    expect(called.has('isBranchMergedOnForge')).toBe(true);
+    const match = await buildPrunePredicate(
+      storeWithBase('upstream/release/1.x'),
+      deps,
+    )(wt());
+    expect(match?.reason).toBe('pr-merged');
+    expect(match?.base).toBe('release/1.x');
+    expect(forgeArgs()).toEqual(['release/1.x', 'upstream']);
   });
 
-  it('prunes a branch only the forge knows is merged (rebased squash)', () => {
-    const { deps } = stubDeps({ isBranchMergedOnForge: true });
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
+  it('reports `pr-closed` for a branch whose PR/MR was closed without merging', async () => {
+    const { deps } = stubDeps({
+      pushed: true,
+      pullRequests: prs({ closed: true }),
+    });
+    expect(
+      (await buildPrunePredicate(storeWithBase(), deps)(wt()))?.reason,
+    ).toBe('pr-closed');
   });
 
-  it('prunes a branch whose PR/MR was closed without merging', () => {
-    const { deps } = stubDeps({ isBranchClosed: true });
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(true);
+  it('does not prune when every signal says no, or the forge gave no data', async () => {
+    const { deps } = stubDeps({ pushed: true, pullRequests: null });
+    expect(await buildPrunePredicate(storeWithBase(), deps)(wt())).toBeNull();
+    const { deps: noSignal } = stubDeps({ pushed: true, pullRequests: prs() });
+    expect(
+      await buildPrunePredicate(storeWithBase(), noSignal)(wt()),
+    ).toBeNull();
+  });
+});
+
+describe('formatPruneCard', () => {
+  const now = Date.parse('2026-10-09T12:00:00Z');
+  const item: Worktree = {
+    path: path.join(homedir(), 'dev', 'repo-feat'),
+    branch: 'feat',
+    isCurrent: false,
+    isMain: false,
+    repoRoot: '/r',
+  };
+  const match: PruneMatch = {
+    reason: 'pr-merged',
+    base: 'main',
+    pullRequests: {
+      merged: true,
+      closed: false,
+      latest: {
+        number: 123,
+        title: 'feat(auth): add SSO login',
+        url: 'https://github.com/org/repo/pull/123',
+        state: 'merged',
+        endedAt: '2026-10-06T12:00:00Z',
+      },
+    },
+    ahead: 4,
+    lastCommit: '5 days ago',
+    dirtyFiles: 0,
+  };
+  // Strip colours so the assertions read the text.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes
+  const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+  it('shows reason, PR, link, status, commits, path and state', () => {
+    const card = plain(formatPruneCard(item, match, now));
+    expect(card).toContain('Reason   PR merged into main');
+    expect(card).toContain('PR       #123 feat(auth): add SSO login');
+    expect(card).toContain('https://github.com/org/repo/pull/123');
+    expect(card).toContain('Status   merged 3 days ago');
+    expect(card).toContain('Commits  4 ahead of main · last commit 5 days ago');
+    expect(card).toContain('Path     ~/dev/repo-feat');
+    expect(card).toContain('State    clean');
   });
 
-  it('does not prune when every signal says no', () => {
-    const { deps } = stubDeps({});
-    expect(buildPrunePredicate(storeWithBase(), deps)(wt())).toBe(false);
+  it('keeps the PR line when the forge gave no data, and counts dirty files', () => {
+    const card = plain(
+      formatPruneCard(
+        item,
+        { ...match, reason: 'patch', pullRequests: null, dirtyFiles: 3 },
+        now,
+      ),
+    );
+    expect(card).toContain('Reason   merged (patch in main)');
+    expect(card).toContain('PR       none found');
+    expect(card).not.toContain('Status');
+    expect(card).toContain('State    3 uncommitted file(s)');
+  });
+
+  it('formats ages with the largest unit', () => {
+    expect(formatAge('2026-10-08T12:00:00Z', now)).toBe('yesterday');
+    expect(formatAge('2026-10-09T11:30:00Z', now)).toBe('30 minutes ago');
   });
 });
 
@@ -637,47 +757,116 @@ describe('selectWipeCandidates', () => {
     repoRoot: '/r',
     ...over,
   });
-  const allMerged = () => true;
 
-  it('includes a merged linked worktree', () => {
-    const items = [wt({ path: '/r/feature', branch: 'feature' })];
-    expect(selectWipeCandidates(items, allMerged)).toEqual(items);
-  });
-
-  it('includes the current worktree (prune is path-independent)', () => {
-    const items = [wt({ isCurrent: true })];
-    expect(selectWipeCandidates(items, allMerged)).toEqual(items);
+  it('includes linked worktrees, the current one too (prune is path-independent)', () => {
+    const items = [wt({}), wt({ path: '/r/cur', isCurrent: true })];
+    expect(selectWipeCandidates(items)).toEqual(items);
   });
 
   it('excludes the main worktree (isMain)', () => {
-    const items = [wt({ path: '/r', repoRoot: '/r', isMain: true })];
-    expect(selectWipeCandidates(items, allMerged)).toEqual([]);
+    expect(
+      selectWipeCandidates([wt({ path: '/r', repoRoot: '/r', isMain: true })]),
+    ).toEqual([]);
   });
 
   it('excludes detached-HEAD worktrees', () => {
-    const items = [wt({ branch: '(detached)' })];
-    expect(selectWipeCandidates(items, allMerged)).toEqual([]);
+    expect(selectWipeCandidates([wt({ branch: '(detached)' })])).toEqual([]);
+  });
+});
+
+describe('wipeWorktrees (streaming)', () => {
+  const wt = (branch: string): Worktree => ({
+    path: `/r/${branch}`,
+    branch,
+    isCurrent: false,
+    isMain: false,
+    repoRoot: '/r',
   });
 
-  it('excludes worktrees the predicate reports as not merged', () => {
-    const items = [wt({ branch: 'feature' })];
-    expect(selectWipeCandidates(items, () => false)).toEqual([]);
+  /** Every worktree is merged by patch id; `gate` holds one branch's check. */
+  const depsWithGate = (
+    gated: string,
+    gate: Promise<void>,
+    onResolved: () => void,
+  ): Partial<PruneDeps> => ({
+    isBranchMerged: async (_repo, branch) => {
+      if (branch === gated) {
+        await gate;
+        onResolved();
+      }
+      return true;
+    },
+    countDirtyFiles: async () => 0,
+    hasRemoteTrackingRef: async () => false,
+    countCommitsAhead: async () => 1,
+    lastCommitAge: async () => 'now',
   });
 
-  it('keeps only merged worktrees from a mixed list', () => {
-    const merged = wt({ path: '/r/merged', branch: 'merged' });
-    const unmerged = wt({ path: '/r/unmerged', branch: 'unmerged' });
-    const main = wt({
-      path: '/r',
-      repoRoot: '/r',
-      branch: 'main',
-      isMain: true,
+  beforeEach(() => {
+    vi.mocked(clack.confirm).mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('prompts for a fast check before a slow one resolves', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    let release = () => {};
+    const gate = new Promise<void>((r) => {
+      release = r;
     });
-    const result = selectWipeCandidates(
-      [merged, unmerged, main],
-      (w) => w.branch === 'merged' || w.branch === 'main',
-    );
-    expect(result).toEqual([merged]);
+    let slowResolved = false;
+    let promptedBeforeSlow = false;
+    vi.mocked(clack.confirm)
+      .mockImplementationOnce(async () => {
+        promptedBeforeSlow = !slowResolved;
+        release();
+        return false;
+      })
+      .mockResolvedValueOnce(false);
+
+    const result = await wipeWorktrees([wt('slow'), wt('fast')], store, {
+      deps: depsWithGate('slow', gate, () => {
+        slowResolved = true;
+      }),
+    });
+
+    expect(promptedBeforeSlow).toBe(true);
+    // Declining moves on to the next candidate.
+    expect(clack.confirm).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ removed: [], cancelled: false });
+  });
+
+  it('stops at a cancelled prompt: no later prompt, no pull', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    vi.mocked(clack.isCancel).mockReturnValueOnce(true);
+
+    const result = await wipeWorktrees([wt('a'), wt('b'), wt('c')], store, {
+      deps: depsWithGate('none', Promise.resolve(), () => {}),
+    });
+
+    expect(clack.confirm).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ removed: [], cancelled: true });
+  });
+
+  it('stops when Ctrl-C hits the spinner', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const gate = new Promise<void>(() => {}); // never resolves
+    vi.mocked(clack.spinner).mockImplementationOnce((opts) => ({
+      start: () => opts?.onCancel?.(),
+      stop: vi.fn(),
+      message: vi.fn(),
+      clear: vi.fn(),
+      cancel: vi.fn(),
+      error: vi.fn(),
+      isCancelled: true,
+    }));
+
+    const result = await wipeWorktrees([wt('slow')], store, {
+      deps: depsWithGate('slow', gate, () => {}),
+    });
+
+    expect(result).toEqual({ removed: [], cancelled: true });
+    expect(clack.confirm).not.toHaveBeenCalled();
   });
 });
 
@@ -841,7 +1030,7 @@ describe('wipeWorktrees (post-prune pull)', () => {
     const feature = makeMerged('feature');
     setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
 
-    const removed = await wipeWorktrees([mainItem(), feature], store);
+    const { removed } = await wipeWorktrees([mainItem(), feature], store);
 
     expect(removed.map((w) => w.branch)).toEqual(['feature']);
     expect(pullFfOnly).toHaveBeenCalledTimes(1);
@@ -853,11 +1042,30 @@ describe('wipeWorktrees (post-prune pull)', () => {
     const feature = makeMerged('feature');
     setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
 
-    const removed = await wipeWorktrees([mainItem(), feature], store, {
+    const { removed } = await wipeWorktrees([mainItem(), feature], store, {
       pull: false,
     });
 
     expect(removed.map((w) => w.branch)).toEqual(['feature']);
+    expect(pullFfOnly).not.toHaveBeenCalled();
+  });
+
+  it('runs no pull after a cancel, even when a worktree was removed', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    const f1 = makeMerged('feat-one');
+    const f2 = makeMerged('feat-two');
+    const f3 = makeMerged('feat-three');
+    setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
+    vi.mocked(clack.confirm).mockClear();
+    vi.mocked(clack.isCancel)
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(true);
+
+    const result = await wipeWorktrees([mainItem(), f1, f2, f3], store);
+
+    expect(result.cancelled).toBe(true);
+    expect(result.removed).toHaveLength(1);
+    expect(clack.confirm).toHaveBeenCalledTimes(2);
     expect(pullFfOnly).not.toHaveBeenCalled();
   });
 
@@ -867,7 +1075,7 @@ describe('wipeWorktrees (post-prune pull)', () => {
     const f2 = makeMerged('feat-two');
     setGlobalConfig({ base_branch: 'main', repos: [repoDir] }, store);
 
-    const removed = await wipeWorktrees([mainItem(), f1, f2], store);
+    const { removed } = await wipeWorktrees([mainItem(), f1, f2], store);
 
     expect(removed.map((w) => w.branch).sort()).toEqual([
       'feat-one',
@@ -875,5 +1083,94 @@ describe('wipeWorktrees (post-prune pull)', () => {
     ]);
     expect(pullFfOnly).toHaveBeenCalledTimes(1);
     expect(pullFfOnly).toHaveBeenCalledWith(repoDir);
+  });
+});
+
+describe('watchPrune', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('waits the interval between passes and stops on a cancelled pass', async () => {
+    const results = [false, false, true];
+    const pass = vi.fn(async () => results.shift() ?? true);
+    const sleep = vi.fn(async () => true);
+
+    expect(await watchPrune(pass, 2, sleep)).toBe(true);
+
+    expect(pass).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(120_000);
+  });
+
+  it('stops without a cancel when Ctrl-C ends the wait', async () => {
+    const pass = vi.fn(async () => false);
+    expect(await watchPrune(pass, 1, async () => false)).toBe(false);
+    expect(pass).toHaveBeenCalledTimes(1);
+  });
+
+  it('prints the next check time', async () => {
+    const log = vi.spyOn(console, 'log');
+    await watchPrune(
+      async () => false,
+      5,
+      async () => false,
+      () => new Date(2026, 9, 9, 14, 30),
+    );
+    expect(String(log.mock.calls[0][0])).toContain(
+      'next check at 14:35 (every 5 min)',
+    );
+  });
+});
+
+describe('runPrune --watch', () => {
+  beforeEach(() => {
+    execSync('git branch -M main', { cwd: repoDir });
+    vi.mocked(clack.confirm).mockClear();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('asks again on the next pass for a worktree declined before', async () => {
+    const wtPath = path.join(tmpDir, 'my-repo-feature');
+    execSync(`git worktree add -b feature ${wtPath}`, { cwd: repoDir });
+    writeFileSync(path.join(wtPath, 'f.txt'), 'x');
+    execSync('git add . && git commit -m "feat"', { cwd: wtPath });
+    writeFileSync(path.join(repoDir, 'other.txt'), 'y');
+    execSync('git add . && git commit -m "other"', { cwd: repoDir });
+    execSync('git cherry-pick feature', { cwd: repoDir });
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ repos: [repoDir], base_branch: 'main' }, store);
+    vi.mocked(clack.confirm)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true);
+    const waits = [true, false];
+    const sleep = vi.fn(async () => waits.shift() ?? false);
+
+    const cancelled = await runPrune({
+      cwd: repoDir,
+      store,
+      watch: true,
+      interval: 1,
+      sleep,
+    });
+
+    expect(cancelled).toBe(false);
+    expect(clack.confirm).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(60_000);
+    expect(existsSync(wtPath)).toBe(false);
+  });
+
+  it('rejects an interval that is not a positive number', async () => {
+    const store = createStore(path.join(tmpDir, 'config'));
+    setGlobalConfig({ repos: [repoDir] }, store);
+    await expect(
+      runPrune({ cwd: repoDir, store, watch: true, interval: 0 }),
+    ).rejects.toThrow('positive number');
+    await expect(
+      runPrune({ cwd: repoDir, store, interval: 5 }),
+    ).rejects.toThrow('--interval needs --watch');
   });
 });
