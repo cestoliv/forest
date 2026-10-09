@@ -9,10 +9,11 @@
 // We shell out to the already-authenticated `gh` / `glab` CLIs (rather than
 // raw REST + token plumbing): they auto-detect the host from the repo's remote,
 // which transparently covers github.com, gitlab.com, and self-hosted GitLab.
-// Everything fails closed (`false`) so callers never offer a worktree for
+// Everything fails closed (no PR data) so callers never offer a worktree for
 // pruning on uncertainty (missing CLI, offline, unpushed branch, no PR/MR).
 
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 export type ForgeTool = 'gh' | 'glab';
 
@@ -49,73 +50,20 @@ export function selectForgeTool(host: string | null): ForgeTool | null {
 }
 
 /**
- * argv for listing *merged* PRs/MRs whose source/head branch is `branch` **and**
+ * argv for listing *every* PR/MR whose source/head branch is `branch` **and**
  * whose target branch is `baseBranch` (a local branch name, e.g. `main`).
  *
  * The target filter matters: callers ask "is this branch merged into *my* base?"
  * and do no git ancestry check, so without `--base`/`--target-branch` a branch
  * merged into `develop` would be reported as merged into `main`.
- */
-export function buildMergedQuery(
-  tool: ForgeTool,
-  branch: string,
-  baseBranch: string,
-): string[] {
-  if (tool === 'gh') {
-    return [
-      'pr',
-      'list',
-      '--head',
-      branch,
-      '--base',
-      baseBranch,
-      '--state',
-      'merged',
-      '--json',
-      'number',
-    ];
-  }
-  return [
-    'mr',
-    'list',
-    '--merged',
-    '--source-branch',
-    branch,
-    '--target-branch',
-    baseBranch,
-    '-F',
-    'json',
-  ];
-}
-
-/**
- * Parse the CLI's JSON output → `true` when at least one merged PR/MR is
- * present. Both `gh --json` and `glab -F json` emit a JSON array. Any non-array
- * / unparseable output → `false`.
- */
-export function parseMergedResult(stdout: string): boolean {
-  try {
-    const data = JSON.parse(stdout);
-    return Array.isArray(data) && data.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * argv for listing *every* PR/MR whose source/head branch is `branch` and whose
- * target branch is `baseBranch` (see `buildMergedQuery` for why the target
- * filter is required).
  *
- * Deliberately unfiltered by state (`--state all` / `--all`) even though the
- * caller only asks about closed ones: a closed PR only means "this branch is
- * dead" if no PR from the same head is *still open*, so the decision needs both
- * facts. Asking for them in one query (rather than a closed query plus an open
- * one) keeps them consistent and keeps the failure mode simple — one call
- * either answers or throws, so a half-answer can never read as "no open PR".
- * `parseClosedResult` does the filtering.
+ * Deliberately unfiltered by state (`--state all` / `--all`): one query answers
+ * "merged?", "closed with no open PR?", and fills the prune card. A closed PR
+ * only means "this branch is dead" if no PR from the same head is *still open*,
+ * and one call either answers both or throws, so a half-answer can never read
+ * as "no open PR".
  */
-export function buildClosedQuery(
+export function buildPullRequestQuery(
   tool: ForgeTool,
   branch: string,
   baseBranch: string,
@@ -131,7 +79,7 @@ export function buildClosedQuery(
       '--state',
       'all',
       '--json',
-      'state',
+      'number,title,url,state,mergedAt,closedAt',
     ];
   }
   return [
@@ -147,130 +95,138 @@ export function buildClosedQuery(
   ];
 }
 
+export interface PullRequest {
+  number: number;
+  title: string;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  /** When it was merged or closed (ISO 8601); absent while open. */
+  endedAt?: string;
+}
+
+export interface PullRequests {
+  /** At least one PR/MR was merged into base. */
+  merged: boolean;
+  /** At least one PR/MR was closed unmerged, and none is still open. */
+  closed: boolean;
+  /** The most recent PR/MR, for display. */
+  latest?: PullRequest;
+}
+
 /**
- * Parse the CLI's JSON output (every PR/MR for this head → base, see
- * `buildClosedQuery`) → `true` only when the branch is genuinely dead: at least
- * one *closed-unmerged* PR/MR **and** none still open.
+ * Parse the CLI's JSON output (every PR/MR for this head → base, gh or glab
+ * fields) into the prune signals, or `null` when the output is unreadable.
  *
- * Two states must be filtered out, both case-insensitively (gh shouts,
- * glab whispers):
- * - `MERGED`/`merged` — merged is not closed-unmerged. gh in particular models
- *   merged as a kind of closed, so it shows up here regardless.
- * - `OPEN`/`opened` — an open PR vetoes the whole signal. Closing a PR and
- *   opening a fresh one from the same branch is routine (a retarget, a botched
- *   PR, a rewritten description), and the stale closed PR must not then read as
- *   a death notice for a branch that is still in flight.
+ * States compare case-insensitively (gh shouts, glab whispers):
+ * - `MERGED`/`merged` → `merged`. gh models merged as a kind of closed, so it is
+ *   never read as closed-unmerged.
+ * - `OPEN`/`opened` vetoes `closed`. Closing a PR and opening a fresh one from
+ *   the same branch is routine, and the stale closed PR must not then read as a
+ *   death notice for a branch still in flight.
  *
- * Any non-array / unparseable output → `false`.
+ * Both CLIs list newest first, so `latest` is the first entry.
  */
-export function parseClosedResult(stdout: string): boolean {
+export function parsePullRequests(stdout: string): PullRequests | null {
+  let data: unknown;
   try {
-    const data = JSON.parse(stdout);
-    if (!Array.isArray(data)) return false;
-    const states = data.map((x) => String(x?.state).toUpperCase());
-    // `OPENED` (glab) shares the `OPEN` (gh) prefix; no other state does.
-    if (states.some((s) => s.startsWith('OPEN'))) return false;
-    return states.includes('CLOSED');
+    data = JSON.parse(stdout);
   } catch {
-    return false;
+    return null;
   }
+  if (!Array.isArray(data)) return null;
+  const prs: PullRequest[] = data.map((x) => {
+    const raw = String(x?.state).toUpperCase();
+    // `OPENED` (glab) shares the `OPEN` (gh) prefix; no other state has it.
+    const state = raw.startsWith('OPEN')
+      ? 'open'
+      : raw === 'MERGED'
+        ? 'merged'
+        : raw === 'CLOSED'
+          ? 'closed'
+          : undefined;
+    return {
+      number: Number(x?.number ?? x?.iid),
+      title: String(x?.title ?? ''),
+      url: String(x?.url ?? x?.web_url ?? ''),
+      // An unknown state (glab `locked`) is neither open nor ended: keep it out
+      // of both signals by reading it as open, which only vetoes.
+      state: state ?? 'open',
+      endedAt:
+        x?.mergedAt || x?.merged_at || x?.closedAt || x?.closed_at || undefined,
+    };
+  });
+  const states = prs.map((p) => p.state);
+  return {
+    merged: states.includes('merged'),
+    closed: !states.includes('open') && states.includes('closed'),
+    latest: prs[0],
+  };
 }
 
 /** Injectable side-effects, so the pure decision logic can be unit-tested. */
 export interface ForgeRunner {
-  remoteUrl(repoRoot: string, remote: string): string;
-  query(repoRoot: string, tool: ForgeTool, args: string[]): string;
+  remoteUrl(repoRoot: string, remote: string): Promise<string>;
+  query(repoRoot: string, tool: ForgeTool, args: string[]): Promise<string>;
 }
 
+const execFileAsync = promisify(execFile);
+
 const defaultRunner: ForgeRunner = {
-  remoteUrl(repoRoot, remote) {
-    return execFileSync('git', ['remote', 'get-url', remote], {
-      cwd: repoRoot,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    }).trim();
+  async remoteUrl(repoRoot, remote) {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['remote', 'get-url', remote],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+      },
+    );
+    return stdout.trim();
   },
-  query(repoRoot, tool, args) {
-    return execFileSync(tool, args, {
+  async query(repoRoot, tool, args) {
+    const { stdout } = await execFileAsync(tool, args, {
       cwd: repoRoot,
       encoding: 'utf8',
-      stdio: 'pipe',
       timeout: 15000,
     });
+    return stdout;
   },
 };
 
 /**
- * Whether `branch` has a *merged* pull request / merge request **into
- * `baseBranch`** on the forge backing `remote`. `baseBranch` is the local branch
- * name (`main`, not `origin/main`) — it becomes the PR/MR target filter, so a
- * branch merged into some other base is not reported here. Resolves the remote
- * URL → host → CLI, queries it, and returns whether any such PR/MR exists. Fails
- * closed (`false`) on any error: missing CLI, offline, not authenticated,
- * unparseable remote, or no result.
+ * Every PR/MR from `branch` **into `baseBranch`** on the forge backing
+ * `remote`, folded into the prune signals (see `parsePullRequests`).
+ * `baseBranch` is the local branch name (`main`, not `origin/main`) — it
+ * becomes the PR/MR target filter. Resolves the remote URL → host → CLI and
+ * queries it. Fails closed (`null`, "no PR data") on any error: missing CLI,
+ * offline, not authenticated, unparseable remote or output.
  *
  * The match is by branch *name*, so in the rare case a branch is merged then
  * deleted and a brand-new branch of the same name is later created, the old
  * merged PR/MR still matches. `wt prune`'s per-branch (and dirty force-) confirm
  * prompts are the backstop against that.
  */
-export function hasMergedPullRequest(
+export async function fetchPullRequests(
   repoRoot: string,
   branch: string,
   baseBranch: string,
   remote = 'origin',
   runner: ForgeRunner = defaultRunner,
-): boolean {
+): Promise<PullRequests | null> {
   try {
     const tool = selectForgeTool(
-      parseRemoteHost(runner.remoteUrl(repoRoot, remote)),
+      parseRemoteHost(await runner.remoteUrl(repoRoot, remote)),
     );
-    if (!tool) return false;
-    return parseMergedResult(
-      runner.query(repoRoot, tool, buildMergedQuery(tool, branch, baseBranch)),
-    );
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Whether `branch` is *dead* on the forge backing `remote`: it has a
- * closed-unmerged pull request / merge request **targeting `baseBranch`** and
- * no PR/MR from the same head is still open. Parallel to
- * `hasMergedPullRequest`, including the local-name `baseBranch` target filter:
- * resolves the remote URL → host → CLI, queries it, and lets
- * `parseClosedResult` decide. Fails closed (`false`) on any error: missing CLI,
- * offline, not authenticated, unparseable remote, or no result.
- *
- * The open-PR veto is what makes this a "dead branch" signal rather than a
- * "has ever been closed" one: reopening work as a second PR from the same
- * branch is routine, and the query is by branch *name*, so the superseded PR
- * matches just as well as the live one. Without the veto `wt prune` offers a
- * branch that is actively in review.
- *
- * Note this is orthogonal to git topology — a closed PR says nothing about
- * whether the branch is an ancestor of base, so callers must not gate this on
- * ancestry checks. The target-branch filter is what keeps it scoped to the
- * caller's base despite that.
- */
-export function hasClosedPullRequest(
-  repoRoot: string,
-  branch: string,
-  baseBranch: string,
-  remote = 'origin',
-  runner: ForgeRunner = defaultRunner,
-): boolean {
-  try {
-    const tool = selectForgeTool(
-      parseRemoteHost(runner.remoteUrl(repoRoot, remote)),
-    );
-    if (!tool) return false;
-    return parseClosedResult(
-      runner.query(repoRoot, tool, buildClosedQuery(tool, branch, baseBranch)),
+    if (!tool) return null;
+    return parsePullRequests(
+      await runner.query(
+        repoRoot,
+        tool,
+        buildPullRequestQuery(tool, branch, baseBranch),
+      ),
     );
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -329,20 +285,24 @@ export function parseOpenResult(stdout: string): number | undefined {
  * Only explains why `wt prune <branch>` does not flag a branch, so it fails
  * quietly (`undefined`) on any error, like the other forge lookups.
  */
-export function findOpenPullRequest(
+export async function findOpenPullRequest(
   repoRoot: string,
   branch: string,
   baseBranch: string,
   remote = 'origin',
   runner: ForgeRunner = defaultRunner,
-): number | undefined {
+): Promise<number | undefined> {
   try {
     const tool = selectForgeTool(
-      parseRemoteHost(runner.remoteUrl(repoRoot, remote)),
+      parseRemoteHost(await runner.remoteUrl(repoRoot, remote)),
     );
     if (!tool) return undefined;
     return parseOpenResult(
-      runner.query(repoRoot, tool, buildOpenQuery(tool, branch, baseBranch)),
+      await runner.query(
+        repoRoot,
+        tool,
+        buildOpenQuery(tool, branch, baseBranch),
+      ),
     );
   } catch {
     return undefined;

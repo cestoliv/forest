@@ -1,8 +1,20 @@
 // src/lib/git.ts
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, realpathSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { hasClosedPullRequest, hasMergedPullRequest } from './forge.js';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
+/** `git <args>` in `cwd` without blocking the event loop. Throws on a non-zero exit. */
+async function git(cwd: string, args: string[], timeout?: number) {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd,
+    encoding: 'utf8',
+    timeout,
+  });
+  return stdout;
+}
 
 export interface Worktree {
   path: string;
@@ -211,6 +223,22 @@ export function isWorktreeClean(worktreePath: string): boolean {
   }
 }
 
+/**
+ * How many entries `git status --porcelain` lists (untracked files count), or
+ * `undefined` on any error. `0` is the only answer that means clean, so an
+ * error never reads as clean.
+ */
+export async function countDirtyFiles(
+  worktreePath: string,
+): Promise<number | undefined> {
+  try {
+    const out = await git(worktreePath, ['status', '--porcelain']);
+    return out.split('\n').filter((l) => l.trim().length > 0).length;
+  } catch {
+    return undefined;
+  }
+}
+
 export function branchExists(repoRoot: string, branch: string): boolean {
   try {
     const local = execFileSync('git', ['branch', '--list', branch], {
@@ -235,16 +263,13 @@ export function branchExists(repoRoot: string, branch: string): boolean {
 
 /** Whether `ancestor` is an ancestor of `descendant` (`git merge-base
  * --is-ancestor`, exit 0 = yes). Any non-zero exit / error → false. */
-function isAncestor(
+async function isAncestor(
   repoRoot: string,
   ancestor: string,
   descendant: string,
-): boolean {
+): Promise<boolean> {
   try {
-    execFileSync('git', ['merge-base', '--is-ancestor', ancestor, descendant], {
-      cwd: repoRoot,
-      stdio: 'pipe',
-    });
+    await git(repoRoot, ['merge-base', '--is-ancestor', ancestor, descendant]);
     return true;
   } catch {
     return false;
@@ -283,21 +308,22 @@ export function splitBaseRef(baseBranch: string): {
  * user's `fetch.prune` / `remote.<name>.prune` gitconfig**. With `fetch.prune =
  * true` and a forge that auto-deletes the head branch on merge, this ref is gone
  * by the time prune runs, so every signal gated on it (the clean+pushed offline
- * path, `isBranchMergedOnForge`, `isBranchClosed`) silently reports `false` and
+ * path, the two forge signals) silently reports `false` and
  * the merged worktree is not offered. That fails closed — nothing unsafe — but
  * it does mean prune can under-report for users with pruning fetches.
  */
-export function hasRemoteTrackingRef(
+export async function hasRemoteTrackingRef(
   repoRoot: string,
   remote: string,
   branch: string,
-): boolean {
+): Promise<boolean> {
   try {
-    execFileSync(
-      'git',
-      ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`],
-      { cwd: repoRoot, stdio: 'pipe' },
-    );
+    await git(repoRoot, [
+      'rev-parse',
+      '--verify',
+      '--quiet',
+      `refs/remotes/${remote}/${branch}`,
+    ]);
     return true;
   } catch {
     return false;
@@ -314,16 +340,12 @@ export function hasRemoteTrackingRef(
  * catch and fail closed — never let a failure read as an empty (i.e. "nothing
  * unique") result.
  */
-function cherryLines(
+async function cherryLines(
   repoRoot: string,
   branch: string,
   baseBranch: string,
-): string[] {
-  const out = execFileSync('git', ['cherry', baseBranch, branch], {
-    cwd: repoRoot,
-    encoding: 'utf8',
-    stdio: 'pipe',
-  });
+): Promise<string[]> {
+  const out = await git(repoRoot, ['cherry', baseBranch, branch]);
   return out.split('\n').filter((l) => l.trim().length > 0);
 }
 
@@ -339,19 +361,19 @@ function cherryLines(
  * function knows — a branch merged by fast-forward, by a merge commit, or by a
  * squash that GitHub rebased onto a newer base (different patch id) is invisible
  * here. Those cases are decided by `hasNoUniqueCommits` and
- * `isBranchMergedOnForge` in the prune predicate, which have the extra context
+ * the forge query in the prune predicate, which have the extra context
  * (the worktree's dirty state, the forge) that this branch-level view lacks.
  *
  * Fails closed: any error (missing base ref, unknown branch) → false, so callers
  * never wipe on uncertainty.
  */
-export function isBranchMerged(
+export async function isBranchMerged(
   repoRoot: string,
   branch: string,
   baseBranch: string,
-): boolean {
+): Promise<boolean> {
   try {
-    const lines = cherryLines(repoRoot, branch, baseBranch);
+    const lines = await cherryLines(repoRoot, branch, baseBranch);
     return lines.length > 0 && lines.every((l) => l.startsWith('-'));
   } catch {
     return false;
@@ -363,13 +385,13 @@ export function isBranchMerged(
  * `+` lines of `git cherry`). Only explains why a branch is not prunable, never
  * decides it, so an error yields `undefined` rather than a guess.
  */
-export function countUniqueCommits(
+export async function countUniqueCommits(
   repoRoot: string,
   branch: string,
   baseBranch: string,
-): number | undefined {
+): Promise<number | undefined> {
   try {
-    return cherryLines(repoRoot, branch, baseBranch).filter((l) =>
+    return (await cherryLines(repoRoot, branch, baseBranch)).filter((l) =>
       l.startsWith('+'),
     ).length;
   } catch {
@@ -395,92 +417,47 @@ export function countUniqueCommits(
  * means something other than "nothing of its own". Fails closed (`false`) on any
  * error, so a bad base ref can never make it true.
  */
-export function hasNoUniqueCommits(
+export async function hasNoUniqueCommits(
   repoRoot: string,
   branch: string,
   baseBranch: string,
-): boolean {
+): Promise<boolean> {
   try {
-    if (cherryLines(repoRoot, branch, baseBranch).length > 0) return false;
-    return isAncestor(repoRoot, branch, baseBranch);
+    if ((await cherryLines(repoRoot, branch, baseBranch)).length > 0)
+      return false;
+    return await isAncestor(repoRoot, branch, baseBranch);
   } catch {
     return false;
   }
 }
 
-/**
- * Whether the forge (GitHub/GitLab) reports a **merged** PR/MR for `branch`.
- *
- * The forge is the only witness for a merge git cannot see: a squash that the
- * forge rebased onto a newer base gets a patch id that matches neither the
- * branch's commits nor an ancestry relation, and the branch stays *ahead* of
- * base. `isBranchMerged` and `hasNoUniqueCommits` are both false for it.
- *
- * Structurally identical to `isBranchClosed`: no git topology checks at all, and
- * the only git-side guard is the pushed-branch check — a purely-local branch
- * cannot have a PR/MR, so the (network) forge call is skipped. Because there is
- * no ancestry check, the PR/MR must be filtered to those *targeting* base, which
- * is why `baseBranch`'s local name is threaded through to `forgeCheck` — without
- * it, a branch merged into `develop` would count as merged into `main`.
- * `forgeCheck` is injectable for testing and itself fails closed; any error →
- * false.
- */
-export function isBranchMergedOnForge(
+/** How many commits `branch` has that `baseBranch` lacks, or `undefined` on error. */
+export async function countCommitsAhead(
   repoRoot: string,
   branch: string,
   baseBranch: string,
-  forgeCheck: (
-    repoRoot: string,
-    branch: string,
-    baseBranch: string,
-    remote: string,
-  ) => boolean = hasMergedPullRequest,
-): boolean {
+): Promise<number | undefined> {
   try {
-    const { remote, branch: baseLocal } = splitBaseRef(baseBranch);
-    if (!hasRemoteTrackingRef(repoRoot, remote, branch)) return false;
-    return forgeCheck(repoRoot, branch, baseLocal, remote);
+    const out = await git(repoRoot, [
+      'rev-list',
+      '--count',
+      `${baseBranch}..${branch}`,
+    ]);
+    return Number(out.trim());
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-/**
- * Whether `branch`'s pull request / merge request was *closed without merging*
- * — the fix landed some other way, so the branch is dead and safe to prune.
- *
- * Unlike `isBranchMerged`, this does **no** git topology checks at all (no
- * `git cherry`, no ancestry, no tip comparison): a closed PR says nothing about
- * whether the branch is an ancestor of base, so this can legitimately prune a
- * branch that is *ahead* of base. The only git-side guard is the same
- * pushed-branch check `isBranchMergedOnForge` uses — a purely-local branch that
- * was never pushed cannot have a PR/MR, so the (network) forge call is skipped.
- * As there, `baseBranch`'s local name is threaded through to `forgeCheck` so the
- * PR/MR is filtered to those targeting base.
- *
- * `forgeCheck` is injectable for testing (default: real `gh`/`glab` lookup) and
- * itself fails closed, so an unavailable/offline forge yields "not closed".
- * Fails closed overall: any error → false, so callers never wipe on uncertainty.
- */
-export function isBranchClosed(
+/** The age of `branch`'s last commit (`5 days ago`), or `undefined` on error. */
+export async function lastCommitAge(
   repoRoot: string,
   branch: string,
-  baseBranch: string,
-  forgeCheck: (
-    repoRoot: string,
-    branch: string,
-    baseBranch: string,
-    remote: string,
-  ) => boolean = hasClosedPullRequest,
-): boolean {
+): Promise<string | undefined> {
   try {
-    const { remote, branch: baseLocal } = splitBaseRef(baseBranch);
-    // A never-pushed branch (no remote-tracking ref) cannot have a PR/MR, so
-    // skip the network call — the common stale fresh-worktree case.
-    if (!hasRemoteTrackingRef(repoRoot, remote, branch)) return false;
-    return forgeCheck(repoRoot, branch, baseLocal, remote);
+    return (await git(repoRoot, ['log', '-1', '--format=%cr', branch])).trim();
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -506,6 +483,14 @@ export function fetchRemote(repoRoot: string, remote = 'origin'): void {
     stdio: 'pipe',
     timeout: 30000,
   });
+}
+
+/** Async `fetchRemote`, so prune can fetch every repo in parallel. */
+export async function fetchRemoteAsync(
+  repoRoot: string,
+  remote = 'origin',
+): Promise<void> {
+  await git(repoRoot, ['fetch', remote], 30000);
 }
 
 /**

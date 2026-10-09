@@ -7,6 +7,7 @@ import {
   type ConfigStore,
   createStore,
   getEffectiveConfig,
+  getGlobalConfig,
 } from '../lib/config.js';
 import { findOpenPullRequest } from '../lib/forge.js';
 import {
@@ -41,18 +42,32 @@ export interface PruneOptions {
   /** Answer every confirmation with yes. */
   yes?: boolean;
   repoPicker?: (repos: string[]) => Promise<string | null>;
+  /** Prune again every `interval` minutes until Ctrl-C. */
+  watch?: boolean;
+  /** Minutes between watch passes; defaults to `auto_refresh_minutes`. */
+  interval?: number;
+  /** Waits between watch passes; resolves false when interrupted. */
+  sleep?: (ms: number) => Promise<boolean>;
 }
 
-export async function runPrune(options: PruneOptions = {}): Promise<void> {
+/**
+ * Resolves true when the user cancelled a prompt or the spinner. Checks may
+ * still be running then, so the caller exits the process.
+ */
+export async function runPrune(options: PruneOptions = {}): Promise<boolean> {
   const { cwd = process.cwd(), store = createStore(), pull = true } = options;
 
   if (options.branch !== undefined) {
+    if (options.watch) throw new Error('--watch takes no <branch>.');
     await pruneBranch(options.branch, { ...options, cwd, store, pull });
     warnIfCwdRemoved(cwd);
-    return;
+    return false;
   }
   if (options.yes || options.repo) {
     throw new Error('--yes and --repo need a <branch>.');
+  }
+  if (options.interval !== undefined && !options.watch) {
+    throw new Error('--interval needs --watch.');
   }
 
   const { items } = await prepareListItems({ cwd, store });
@@ -63,19 +78,87 @@ export async function runPrune(options: PruneOptions = {}): Promise<void> {
         'No repos registered. Run `wt create` inside a repo to get started.',
       ),
     );
-    return;
+    return false;
   }
 
-  const removed = await wipeWorktrees(items, store, { fetch: true, pull });
-  if (removed.length > 0) {
-    console.log(pc.green(`✓ Pruned ${removed.length} worktree(s).`));
+  const pass = async (passItems: Worktree[]) => {
+    const { removed, cancelled } = await wipeWorktrees(passItems, store, {
+      fetch: true,
+      pull,
+      quiet: options.watch,
+    });
+    if (removed.length > 0) {
+      console.log(pc.green(`✓ Pruned ${removed.length} worktree(s).`));
+    }
+    return cancelled;
+  };
+
+  let cancelled: boolean;
+  if (options.watch) {
+    const minutes =
+      options.interval ?? getGlobalConfig(store).auto_refresh_minutes;
+    if (!(minutes > 0 && Number.isFinite(minutes))) {
+      throw new Error(
+        `Invalid interval: ${minutes}. Pass a positive number of minutes.`,
+      );
+    }
+    // Each pass lists again, so new worktrees and repos show up.
+    cancelled = await watchPrune(
+      async () => pass((await prepareListItems({ cwd, store })).items),
+      minutes,
+      options.sleep,
+    );
+  } else {
+    cancelled = await pass(items);
   }
+  if (cancelled) console.log(pc.dim('Prune cancelled.'));
 
   // Non-interactive exit: if prune removed the worktree this command was run
   // from, the shell is now in a gone directory. Printed here (not inside
   // `wipeWorktrees`, which the TUI `P` also calls) so it lands last, on return
   // to the shell — the TUI covers its own case in `runList`.
   warnIfCwdRemoved(cwd);
+  return cancelled;
+}
+
+/**
+ * Run `pass` (resolves true on a cancel), then wait `minutes`, until a pass
+ * is cancelled or the wait is interrupted. Passes never overlap: the wait
+ * starts only once a pass has finished, open prompts included. Resolves true
+ * when a pass was cancelled.
+ */
+export async function watchPrune(
+  pass: () => Promise<boolean>,
+  minutes: number,
+  sleep: (ms: number) => Promise<boolean> = sleepUnlessInterrupted,
+  now: () => Date = () => new Date(),
+): Promise<boolean> {
+  const ms = minutes * 60_000;
+  while (!(await pass())) {
+    const at = new Date(now().getTime() + ms).toTimeString().slice(0, 5);
+    console.log(
+      pc.dim(
+        `Watching — next check at ${at} (every ${minutes} min). Ctrl-C to stop.`,
+      ),
+    );
+    if (!(await sleep(ms))) return false;
+  }
+  return true;
+}
+
+/** Wait `ms`. Ctrl-C ends the wait early (false) instead of killing the process. */
+function sleepUnlessInterrupted(ms: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const onInterrupt = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    const timer = setTimeout(() => {
+      process.removeListener('SIGINT', onInterrupt);
+      resolve(true);
+    }, ms);
+    process.once('SIGINT', onInterrupt);
+  });
 }
 
 /**
@@ -126,25 +209,29 @@ async function pruneBranch(
     );
   }
 
-  fetchRepos([target], store);
-  const flagged = buildPrunePredicate(store)(target);
-  if (!flagged) {
+  await Promise.all(fetchRepos([target], store).values());
+  const match = await buildPrunePredicate(store)(target);
+  if (!match) {
     clack.log.warn(
-      `${pc.bold(branch)} is not merged or closed: ${explainNotFlagged(target, store).join(', ')}.`,
+      `${pc.bold(branch)} is not merged or closed: ${(await explainNotFlagged(target, store)).join(', ')}.`,
     );
   }
 
-  const removed = await deleteWorktree(target, store, {
+  const result = await deleteWorktree(target, store, {
     yes: options.yes,
-    initialValue: flagged ? undefined : false,
+    initialValue: match ? undefined : false,
+    details: match ?? undefined,
   });
-  if (removed && options.pull) {
+  if (result === 'removed' && options.pull) {
     await pullMainWorktrees(items, new Set([target.repoRoot]), store);
   }
 }
 
 /** Why `buildPrunePredicate` does not flag `wt`, as short phrases. */
-function explainNotFlagged(wt: Worktree, store: ConfigStore): string[] {
+async function explainNotFlagged(
+  wt: Worktree,
+  store: ConfigStore,
+): Promise<string[]> {
   const base = getEffectiveConfig(wt.repoRoot, store).base_branch;
   const { remote, branch: baseLocal } = splitBaseRef(base);
   if (wt.branch === base || wt.branch === baseLocal) {
@@ -152,10 +239,15 @@ function explainNotFlagged(wt: Worktree, store: ConfigStore): string[] {
   }
 
   const reasons: string[] = [];
-  const unique = countUniqueCommits(wt.repoRoot, wt.branch, base);
+  const unique = await countUniqueCommits(wt.repoRoot, wt.branch, base);
   if (unique) reasons.push(`${unique} unique commit(s) not in ${base}`);
-  if (hasRemoteTrackingRef(wt.repoRoot, remote, wt.branch)) {
-    const pr = findOpenPullRequest(wt.repoRoot, wt.branch, baseLocal, remote);
+  if (await hasRemoteTrackingRef(wt.repoRoot, remote, wt.branch)) {
+    const pr = await findOpenPullRequest(
+      wt.repoRoot,
+      wt.branch,
+      baseLocal,
+      remote,
+    );
     if (pr !== undefined) reasons.push(`PR #${pr} open`);
   } else {
     reasons.push(`never pushed to ${remote}`);
