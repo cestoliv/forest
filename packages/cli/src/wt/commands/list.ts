@@ -32,6 +32,7 @@ import {
 } from '../lib/git.js';
 import { openIde } from '../lib/ide.js';
 import { stopOrcaWorktree } from '../lib/orca.js';
+import { findWorktreeProcesses, killProcesses } from '../lib/processes.js';
 import { getRegisteredRepos, registerRepo } from '../lib/registry.js';
 import { runCommands } from '../lib/setup.js';
 import { buildTemplateVars, expandTemplate } from '../lib/template.js';
@@ -328,6 +329,23 @@ export async function deleteWorktree(
     }
   }
 
+  // A dev server or watcher that teardown did not stop keeps writing into
+  // the worktree while git deletes it, so the removal fails half way.
+  const procs = findWorktreeProcesses(item.path);
+  if (procs.length > 0) {
+    clack.log.warn(
+      `Processes running from this worktree:\n${procs.map((p) => `  ${p.pid} ${p.command}`).join('\n')}`,
+    );
+    if (await ask(`Kill ${procs.length} process(es) before removal?`)) {
+      const alive = await killProcesses(procs.map((p) => p.pid));
+      if (alive.length > 0) {
+        clack.log.warn(`Could not kill: ${alive.join(', ')}`);
+      }
+    } else if (cancelled) {
+      return notRemoved();
+    }
+  }
+
   try {
     removeWorktree(item.repoRoot, item.path);
     return reportRemoved('✓ Removed');
@@ -354,10 +372,10 @@ export async function deleteWorktree(
 }
 
 /**
- * The three ways `git worktree remove` refuses a removal that a force retry
- * can still carry out: submodules, uncommitted changes, and a lock left by an
- * agent that claimed the worktree (often a dead one — the lock outlives the
- * process). Returns the warning to print and the question to ask, or
+ * The ways `git worktree remove` refuses a removal that a force retry can
+ * still carry out: submodules, uncommitted changes, a lock left by an agent
+ * that claimed the worktree (often a dead one — the lock outlives the
+ * process), and a half-deleted directory a live process wrote into. Returns the warning to print and the question to ask, or
  * `undefined` for a failure force cannot fix.
  */
 function forceReason(
@@ -377,6 +395,13 @@ function forceReason(
     return {
       warning: `Worktree is locked${lock ? `: ${lock}` : ''}.`,
       question: `Force delete ${pc.bold(name)}? The lock will be overridden.`,
+    };
+  }
+  if (msg.includes('Directory not empty')) {
+    return {
+      warning:
+        'A process wrote into the worktree while git deleted it. Git unregistered the worktree but left files behind.',
+      question: `Delete the rest of ${pc.bold(name)}?`,
     };
   }
   if (msg.includes('modified or untracked files')) {

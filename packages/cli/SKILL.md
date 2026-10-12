@@ -143,7 +143,8 @@ Remove every worktree whose branch has already been merged into the base
 branch (`base_branch`, default `origin/main`), **or** whose PR/MR was closed
 without merging (dead branch). Each candidate is confirmed
 individually — and force-confirmed when git refuses (submodules / uncommitted
-changes), exactly like a manual `d` delete. The branch itself is left intact;
+changes), exactly like a manual `d` delete. A process that runs from the
+worktree (a dev server, a watcher) is listed with an offer to kill it first. The branch itself is left intact;
 only the worktree is removed.
 
 The current worktree (the one you ran `wt` from) is pruned like any other — the
@@ -191,7 +192,8 @@ not. It looks across every registered repo.
   skip the picker, pass `--repo <path>`. A non-interactive run requires
   `--repo`.
 - `-y` / `--yes` answers every confirmation with yes, including the force
-  confirmation for uncommitted changes, submodules, or a lock.
+  confirmation for uncommitted changes, submodules, or a lock, and the kill
+  confirmation for processes that run from the worktree (a dev server).
 - The branch stays. Only the worktree goes, through the same Orca stop,
   `teardown_commands`, and force fallback as any other removal.
 - The main worktree is never removed. A branch with no worktree exits non-zero.

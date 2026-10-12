@@ -111,6 +111,18 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   teardown and git removal (a live agent PTY inside the worktree makes removal
   fail "busy"), is attempted for every deletion (there is no per-worktree `ide`
   to gate on), and is wrapped in a try/catch so Orca can never block a delete.
+  After teardown, `lib/processes.ts` `findWorktreeProcesses` lists the processes whose
+  command line runs code from the worktree (a dev server, a watcher, esbuild),
+  and `deleteWorktree` offers to kill them (`killProcesses`: SIGTERM, then
+  SIGKILL after 2s). Such a process writes into the directory while git deletes
+  it: git then fails with `Directory not empty`, unregisters the worktree
+  anyway, and leaves a half-deleted orphan. It matches the command line, not
+  the cwd, because a cwd does not block a delete and also matches idle shells
+  and the shared browser daemon. The path must start an argument (after a
+  space, `=` or a quote), and both the registered and the resolved path match.
+  It excludes `wt`'s own pid and its ancestors.
+  `forceReason` also maps `Directory not empty` to a force retry, which
+  `rmSync`s the orphan (with `maxRetries`) and runs `git worktree prune`.
   `deleteWorktree` funnels its three success paths (normal removal + the two
   force fallbacks) through one `reportRemoved` helper (green `✓ Removed` line).
   It resolves `'removed' | 'declined' | 'cancelled'`: a clack cancel (Ctrl-C)
