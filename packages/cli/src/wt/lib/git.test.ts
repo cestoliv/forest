@@ -263,6 +263,17 @@ describe('removeWorktree', () => {
     expect(worktrees.find((w) => w.branch === 'gone')).toBeUndefined();
   });
 
+  it('force-removes a half-deleted worktree git already unregistered', () => {
+    const wtPath = path.join(tmpDir, 'repo-half');
+    addWorktree(repoDir, wtPath, 'half', 'HEAD');
+    rmSync(path.join(repoDir, '.git', 'worktrees', 'repo-half'), {
+      recursive: true,
+      force: true,
+    });
+    removeWorktree(repoDir, wtPath, true);
+    expect(existsSync(wtPath)).toBe(false);
+  });
+
   it('does not fall back when force is false', () => {
     const wtPath = path.join(tmpDir, 'repo-no-fallback');
     addWorktree(repoDir, wtPath, 'no-fallback', 'HEAD');

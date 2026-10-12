@@ -180,7 +180,11 @@ export function removeWorktree(
     if (!force) throw err;
 
     if (existsSync(worktreePath)) {
-      rmSync(worktreePath, { recursive: true, force: true });
+      rmSync(worktreePath, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+      });
     }
     execFileSync('git', ['worktree', 'prune'], {
       cwd: repoRoot,

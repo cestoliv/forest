@@ -237,7 +237,8 @@ not. It looks across every registered repo.
   skip the picker, pass `--repo <path>`. A non-interactive run requires
   `--repo`.
 - `-y` / `--yes` answers every confirmation with yes, including the force
-  confirmation for uncommitted changes, submodules, or a lock.
+  confirmation for uncommitted changes, submodules, or a lock, and the kill
+  confirmation for processes that run from the worktree (a dev server).
 - The branch stays. Only the worktree goes, through the same Orca stop,
   `teardown_commands`, and force fallback as any other removal.
 - The main worktree is never removed. A branch with no worktree exits non-zero.
@@ -255,7 +256,9 @@ another way, so the branch is dead) and removes it — **always confirming each
 branch individually**,
 and force-confirming when git refuses (submodules or uncommitted changes), just
 like a manual `D` delete. The branch itself stays; only the worktree is removed.
-Your `teardown_commands` run before each removal.
+Your `teardown_commands` run before each removal. When a process still runs
+from the worktree (a dev server, a watcher), `wt` lists it and offers to kill
+it first, because it can write into the directory while git deletes it.
 
 Prune (and the TUI `D` key) removes the **current** worktree — the one you ran
 `wt` from — just like any other; the behaviour doesn't change with your launch
