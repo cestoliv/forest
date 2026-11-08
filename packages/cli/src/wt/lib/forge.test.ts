@@ -119,19 +119,23 @@ describe('parsePullRequests', () => {
   const parse = (prs: unknown[]) => parsePullRequests(JSON.stringify(prs));
 
   it('reads a merged gh PR, with its card data', () => {
+    const pr = {
+      number: 12,
+      title: 'feat: x',
+      url: 'https://github.com/o/r/pull/12',
+      state: 'merged',
+      endedAt: '2026-10-01T00:00:00Z',
+    };
     expect(parse([gh('MERGED', { mergedAt: '2026-10-01T00:00:00Z' })])).toEqual(
-      {
-        merged: true,
-        closed: false,
-        latest: {
-          number: 12,
-          title: 'feat: x',
-          url: 'https://github.com/o/r/pull/12',
-          state: 'merged',
-          endedAt: '2026-10-01T00:00:00Z',
-        },
-      },
+      { merged: true, closed: false, latest: pr, mergedPr: pr },
     );
+  });
+
+  it('cites the merged PR even when a newer one is open', () => {
+    expect(
+      parse([gh('OPEN', { number: 13 }), gh('MERGED', { number: 12 })])
+        ?.mergedPr?.number,
+    ).toBe(12);
   });
 
   it('reads a merged glab MR (iid, web_url, merged_at)', () => {

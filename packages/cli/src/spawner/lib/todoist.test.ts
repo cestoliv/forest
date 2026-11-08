@@ -48,4 +48,22 @@ describe('TodoistClient', () => {
     const client = new TodoistClient('', mock.fetch, BASE); // empty token -> 401
     await expect(client.listLabels()).rejects.toThrow(/401/);
   });
+
+  it('reads a missing or malformed task id as null and closes with a 204', async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      calls.push(`${init.method} ${url}`);
+      if (init.method === 'POST') return new Response(null, { status: 204 });
+      return new Response('', { status: url.endsWith('/bad') ? 400 : 404 });
+    }) as typeof fetch;
+    const client = new TodoistClient('tok', fetchImpl, BASE);
+    expect(await client.getTask('x')).toBeNull();
+    expect(await client.getTask('bad')).toBeNull();
+    await client.closeTask('x');
+    expect(calls).toEqual([
+      `GET ${BASE}/tasks/x`,
+      `GET ${BASE}/tasks/bad`,
+      `POST ${BASE}/tasks/x/close`,
+    ]);
+  });
 });

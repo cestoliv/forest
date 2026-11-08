@@ -11,6 +11,7 @@ import {
   getEffectiveConfig,
   getGlobalConfig,
 } from '../lib/config.js';
+import { finishPrunedTask } from '../lib/finish-task.js';
 import { fetchPullRequests, type PullRequests } from '../lib/forge.js';
 import {
   countCommitsAhead,
@@ -840,7 +841,10 @@ export async function wipeWorktrees(
       details: candidate.match,
     });
     if (result === 'cancelled') cancelled = true;
-    if (result === 'removed') removed.push(candidate.wt);
+    if (result === 'removed') {
+      removed.push(candidate.wt);
+      await finishPrunedTask(candidate.wt.branch, candidate.match.pullRequests);
+    }
   }
   if (spinning) spin.clear();
   if (cancelled) return { removed, cancelled };

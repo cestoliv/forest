@@ -288,6 +288,22 @@ Biome is the sole linter/formatter. Key style: single quotes, 2-space indent, tr
   `deleteWorktree(target, store, { initialValue: false })`. `deleteWorktree`'s
   `yes` option (`-y`) answers all its prompts, including teardown-failure and
   force confirmations. `--yes`/`--repo` without a branch throw.
+- **Todoist finish after prune** → `src/wt/lib/finish-task.ts`. After a
+  removal, `wipeWorktrees` (CLI prune, watch, TUI `P`) and `pruneBranch` call
+  `finishPrunedTask(branch, match.pullRequests)`. It acts only when
+  `spawner/lib/branch.ts` `parseTaskId` finds a task id (a 16-char id with an
+  uppercase letter, or 10+ digits, as the last `-` segment) **and** the
+  prune match carries a merged PR (`PullRequests.mergedPr`). An unflagged
+  `wt prune <branch>` has no match, so it never finishes a task. It reads the
+  agent-spawner config (`existsSync` first, since `createStore` writes a
+  default file), resolves the ready/working label names, and runs
+  `finishTask(taskId, pr, deps)`: complete the open task (drop `Agent
+  Working`, close, comment the PR), mark each open `next:` task `Agent Ready`
+  unless it is Ready or Working already, close the `epic:` task when no open
+  task in its project is its subtask or names it, then comment any broken
+  link on the pruned task. `parseTaskFields` reads only the leading `next:`/
+  `epic:` lines. `FinishDeps` (api, label names, log, notify) is injectable.
+  Every error prints one line: the worktree is already gone.
 - `wt count` → `src/wt/commands/count.ts` — reuses `prepareListItems` (same
   global scan + auto-registration as `list`/`prune`), then counts each item
   with `isMain` false (the main checkout is the repo itself, not a workspace —

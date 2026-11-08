@@ -14,6 +14,9 @@ export interface TodoistTask {
   labels: string[];
   added_at: string;
   due?: TodoistDue | null;
+  /** True once the task is completed. */
+  checked?: boolean;
+  parent_id?: string | null;
 }
 
 export interface TodoistLabel {
@@ -50,6 +53,8 @@ export class TodoistClient implements TodoistApi {
     method: string,
     path: string,
     body?: unknown,
+    /** Resolve null when the resource does not exist (404, or 400 for a malformed id). */
+    nullIfMissing = false,
   ): Promise<T> {
     const res = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
@@ -59,9 +64,13 @@ export class TodoistClient implements TodoistApi {
       },
       ...(body ? { body: JSON.stringify(body) } : {}),
     });
+    if (nullIfMissing && (res.status === 404 || res.status === 400)) {
+      return null as T;
+    }
     if (!res.ok) {
       throw new Error(`Todoist ${method} ${path} failed: ${res.status}`);
     }
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
 
@@ -96,5 +105,26 @@ export class TodoistClient implements TodoistApi {
 
   async addComment(taskId: string, content: string): Promise<void> {
     await this.request('POST', '/comments', { task_id: taskId, content });
+  }
+
+  /** The task, open or completed, or null when no task has this id. */
+  getTask(taskId: string): Promise<TodoistTask | null> {
+    return this.request<TodoistTask | null>(
+      'GET',
+      `/tasks/${encodeURIComponent(taskId)}`,
+      undefined,
+      true,
+    );
+  }
+
+  async closeTask(taskId: string): Promise<void> {
+    await this.request('POST', `/tasks/${taskId}/close`);
+  }
+
+  /** Open tasks of one project. */
+  listTasksByProject(projectId: string): Promise<TodoistTask[]> {
+    return this.paginate<TodoistTask>(
+      `/tasks?project_id=${encodeURIComponent(projectId)}`,
+    );
   }
 }

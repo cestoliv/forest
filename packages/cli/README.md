@@ -330,6 +330,38 @@ is skipped (with a note) rather than failing the prune when it can't pull:
 Pass `--no-pull` to skip this entirely. The TUI `P` key **always** auto-pulls
 (there is no TUI opt-out; `--no-pull` is CLI-only).
 
+### Todoist finish after prune
+
+When prune removes the worktree of an agent-spawner branch (`<slug>-<taskId>`)
+whose PR merged, `wt` finishes the Todoist task and starts the next step. This
+covers `wt prune`, `wt prune <branch>`, `wt prune <branch> -y`, and the TUI
+`P` key. A branch with no task id, or with no merged PR, is left alone.
+
+1. If the task is open, `wt` removes `Agent Working`, completes the task, and
+   comments `Merged in PR #<n> <url>`. Other labels stay.
+2. `wt` reads the `next:` and `epic:` fields at the top of the description.
+3. Each open `next` task gets `Agent Ready`, and agent-spawner picks it up. A
+   task already `Agent Ready` or `Agent Working` is left alone.
+4. A `next` or `epic` id that is missing or already completed prints a
+   warning, and `wt` comments it on the pruned task.
+5. The epic completes when no open subtask and no open task in the epic's
+   project names it in `epic:`. `wt` comments on the epic, prints the result,
+   and sends a macOS notification.
+
+A completed task still runs steps 2 to 5, so a second run is safe. The
+Todoist step runs after the removal and never fails the prune: an error
+prints one line. It reads the token and label ids from the agent-spawner
+config. Without that config, it prints a one-line notice and skips.
+
+Task description fields, one per line, before any other text:
+
+    next: <taskId>[, <taskId> ...]
+    epic: <taskId>
+
+Several `next` ids start in parallel. Give `Agent Ready` by hand only to the
+first step of a chain. The later steps carry no state label until the prune
+adds it. To hold a step until a date, give it a due date.
+
 ## Count — `wt count`
 
 ```bash

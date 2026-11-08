@@ -9,6 +9,7 @@ import {
   getEffectiveConfig,
   getGlobalConfig,
 } from '../lib/config.js';
+import { finishPrunedTask } from '../lib/finish-task.js';
 import { findOpenPullRequest } from '../lib/forge.js';
 import {
   countUniqueCommits,
@@ -222,6 +223,9 @@ async function pruneBranch(
     initialValue: match ? undefined : false,
     details: match ?? undefined,
   });
+  if (result === 'removed') {
+    await finishPrunedTask(branch, match?.pullRequests);
+  }
   if (result === 'removed' && options.pull) {
     await pullMainWorktrees(items, new Set([target.repoRoot]), store);
   }

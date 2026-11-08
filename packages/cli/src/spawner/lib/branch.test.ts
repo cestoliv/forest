@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildBranchName, slugify } from './branch.js';
+import { buildBranchName, parseTaskId, slugify } from './branch.js';
 
 describe('slugify', () => {
   it('lowercases and dashes', () => {
@@ -27,5 +27,32 @@ describe('buildBranchName', () => {
     expect(buildBranchName('agent/', 'Fix login', '6XGg')).toBe(
       'agent/fix-login-6XGg',
     );
+  });
+});
+
+describe('parseTaskId', () => {
+  it('inverts buildBranchName for a v1 id, with or without a prefix', () => {
+    for (const prefix of ['', 'agent/']) {
+      const branch = buildBranchName(
+        prefix,
+        'Add gender field',
+        '6hMvpJ6h8pFV8Fg4',
+      );
+      expect(parseTaskId(branch)).toBe('6hMvpJ6h8pFV8Fg4');
+    }
+  });
+  it('reads a legacy numeric id', () => {
+    expect(parseTaskId('fix-crash-8483726192')).toBe('8483726192');
+  });
+  it('finds no id in a hand-made branch', () => {
+    for (const branch of [
+      'todoist-finish-on-prune',
+      'fix-login-2',
+      'main',
+      'feat/abcdefghijklmnop',
+      'bump-20261108',
+    ]) {
+      expect(parseTaskId(branch)).toBeNull();
+    }
   });
 });
