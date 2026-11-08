@@ -111,6 +111,8 @@ export interface PullRequests {
   closed: boolean;
   /** The most recent PR/MR, for display. */
   latest?: PullRequest;
+  /** The newest merged PR/MR, which the Todoist finish step cites. */
+  mergedPr?: PullRequest;
 }
 
 /**
@@ -160,6 +162,7 @@ export function parsePullRequests(stdout: string): PullRequests | null {
     merged: states.includes('merged'),
     closed: !states.includes('open') && states.includes('closed'),
     latest: prs[0],
+    mergedPr: prs.find((p) => p.state === 'merged'),
   };
 }
 
