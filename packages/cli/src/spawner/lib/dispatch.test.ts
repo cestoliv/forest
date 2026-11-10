@@ -123,7 +123,7 @@ describe('dispatchTask', () => {
           project: 'OVL',
           labels: ['2183895737'],
           path: '/repos/mobile',
-          promptTemplate: 'Use the auto-factory skill on {{url}}',
+          promptTemplate: 'Use the factory skill on {{url}}',
         },
       ],
     };
@@ -131,7 +131,7 @@ describe('dispatchTask', () => {
     await dispatchTask(mobileTask, d);
     expect(spawnAgent).toHaveBeenCalledWith(
       'agent/mobile-crash-m1',
-      'Use the auto-factory skill on https://app.todoist.com/app/task/m1',
+      'Use the factory skill on https://app.todoist.com/app/task/m1',
       '/repos/mobile',
       undefined,
     );
