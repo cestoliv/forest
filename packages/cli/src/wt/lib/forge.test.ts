@@ -160,6 +160,12 @@ describe('parsePullRequests', () => {
     });
   });
 
+  it('lets an open PR/MR on the same head veto merged', () => {
+    // A branch reused for a new PR after its first one merged is still in review.
+    expect(parse([gh('OPEN'), gh('MERGED')])?.merged).toBe(false);
+    expect(parse([glab('opened'), glab('merged')])?.merged).toBe(false);
+  });
+
   it('lets an open PR/MR on the same head veto closed', () => {
     // Regression: a stale closed PR must not read as "branch is dead" while a
     // newer PR from the same branch is still open.

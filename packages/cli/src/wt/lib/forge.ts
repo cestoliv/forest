@@ -105,7 +105,7 @@ export interface PullRequest {
 }
 
 export interface PullRequests {
-  /** At least one PR/MR was merged into base. */
+  /** At least one PR/MR was merged into base, and none is still open. */
   merged: boolean;
   /** At least one PR/MR was closed unmerged, and none is still open. */
   closed: boolean;
@@ -122,9 +122,9 @@ export interface PullRequests {
  * States compare case-insensitively (gh shouts, glab whispers):
  * - `MERGED`/`merged` → `merged`. gh models merged as a kind of closed, so it is
  *   never read as closed-unmerged.
- * - `OPEN`/`opened` vetoes `closed`. Closing a PR and opening a fresh one from
- *   the same branch is routine, and the stale closed PR must not then read as a
- *   death notice for a branch still in flight.
+ * - `OPEN`/`opened` vetoes `merged` and `closed`. Reusing a branch for a fresh
+ *   PR after the last one merged or closed is routine, and the old PR must not
+ *   then read as a death notice for a branch still in flight.
  *
  * Both CLIs list newest first, so `latest` is the first entry.
  */
@@ -159,7 +159,7 @@ export function parsePullRequests(stdout: string): PullRequests | null {
   });
   const states = prs.map((p) => p.state);
   return {
-    merged: states.includes('merged'),
+    merged: !states.includes('open') && states.includes('merged'),
     closed: !states.includes('open') && states.includes('closed'),
     latest: prs[0],
     mergedPr: prs.find((p) => p.state === 'merged'),
@@ -204,10 +204,9 @@ const defaultRunner: ForgeRunner = {
  * queries it. Fails closed (`null`, "no PR data") on any error: missing CLI,
  * offline, not authenticated, unparseable remote or output.
  *
- * The match is by branch *name*, so in the rare case a branch is merged then
- * deleted and a brand-new branch of the same name is later created, the old
- * merged PR/MR still matches. `wt prune`'s per-branch (and dirty force-) confirm
- * prompts are the backstop against that.
+ * The match is by branch *name*, so an old merged PR/MR still matches a branch
+ * reused under the same name. An open PR/MR vetoes it. With none open yet,
+ * `wt prune`'s per-branch (and dirty force-) confirm prompts are the backstop.
  */
 export async function fetchPullRequests(
   repoRoot: string,
