@@ -470,9 +470,10 @@ export interface PruneMatch {
  *    so the dirty state is the discriminator, and requiring a remote-tracking
  *    ref keeps a just-created `wt create foo` from being offered for deletion.
  *
- * 3. `pr-merged` — the forge reports a merged PR/MR targeting base. Needed when
- *    a squash was rebased onto a newer base: its patch id matches nothing and
- *    the branch stays *ahead* of base, so both git signals above are false.
+ * 3. `pr-merged` — the forge reports a merged PR/MR targeting base, and none
+ *    still open (a reused branch). Needed when a squash was rebased onto a
+ *    newer base: its patch id matches nothing and the branch stays *ahead* of
+ *    base, so both git signals above are false.
  *
  * 4. `pr-closed` — a PR/MR targeting base was closed without merging and none
  *    is still open (dead branch).

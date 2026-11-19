@@ -219,7 +219,8 @@ first so the network is often not touched at all.
 3. **Merged PR/MR on the forge** (via `gh` for GitHub, `glab` for GitLab incl.
    self-hosted, auto-detected from the remote). Required when the forge rebased
    the squash onto a newer base: the patch id then matches nothing and the
-   branch is still *ahead* of base, so neither offline signal fires.
+   branch is still *ahead* of base, so neither offline signal fires. An open
+   PR/MR from the same branch vetoes it (a branch reused for a new PR).
 4. **Closed-unmerged PR/MR** on the forge — the branch is dead (the fix landed
    another way). Like (3) it does no git ancestry checks, so it too can prune a
    branch ahead of base. It requires that **no** PR/MR from the same branch is

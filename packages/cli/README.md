@@ -293,7 +293,8 @@ run first, so most branches are decided without touching the network:
   including self-hosted, auto-detected from the remote). This is what catches a
   squash the forge **rebased onto a newer base**: the resulting commit has a
   different patch than yours and your branch is still *ahead* of base, so no
-  amount of local git can see the merge.
+  amount of local git can see the merge. An open PR/MR on the same branch
+  vetoes it, so a branch reused for a new PR after its first one merged stays.
 - **A PR/MR closed without merging, with none still open on that branch** — the
   fix landed another way, so the branch is dead. Like the previous signal it
   does no git ancestry checks, so it too can prune a branch that is *ahead* of
